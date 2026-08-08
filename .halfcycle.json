@@ -1,0 +1,6 @@
+{
+  "base_branch": "main",
+  "push_policy": "hybrid",
+  "budget_minutes": 45,
+  "ceremony_tier": 0
+}
