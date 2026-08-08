@@ -10,7 +10,13 @@
 
 ## Stack
 
-Planned (nothing implemented yet): local single-user service on `127.0.0.1:7420` + web UI, structured as a workspace monorepo (packages for server, UI, and shared code). Concrete languages/frameworks to be settled in the architecture doc.
+Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.0.0.1:7420`, shipped as one static binary.
+
+- **Server: Rust** — Axum (tower middleware enforces the human-token/runtime-token boundary), SQLite via `sqlx` (compile-time-checked queries, WAL mode), `serde`, `sha2` for content hashing.
+- **UI: React + Vite** — React Flow (`@xyflow/react`) for the pipeline canvas, TanStack Router/Query, Tailwind. UI is a projection of server state; all rules enforced at the API.
+- **Type seam: `ts-rs`** — Rust structs are the single source of truth for the object model; TypeScript types are generated from them at build time.
+- **Realtime: SSE** (`axum::response::sse`) for span streaming, heartbeats, toasts.
+- **Distribution:** built UI embedded via `rust-embed`; `cargo build` yields one binary, no Node at runtime.
 
 ## Layout
 
@@ -19,7 +25,7 @@ Planned (nothing implemented yet): local single-user service on `127.0.0.1:7420`
 - `ENGAGEMENT.md` — operational decisions (project type, repo shape, push/branch policy, ceremony tier)
 - `.halfcycle.json` — machine-readable projection of ENGAGEMENT decisions
 - `.claude/context/` — per-area agent context files (append-only)
-- Packages will land under `packages/` when the monorepo is scaffolded
+- Code will land as a cargo workspace under `crates/` (server) plus `ui/` (Vite app) when scaffolded
 
 ## Key commands
 

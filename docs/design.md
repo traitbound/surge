@@ -701,6 +701,18 @@ What the prototype decides, what it fakes, and what is still open. Keeping these
 >
 > **Five.** Retention compacts span bodies after 30–90 days, but replay and the data-in/out pane read those bodies. What those surfaces show for a compacted span is undefined.
 
+> **Resolutions — 2026-08-08**
+>
+> **One — resolved: cut template push-back for v1.** Project-canvas edits never flow back to a template. A single **Promote to fork** action snapshots the project's materialized graph as a new named fork under "My forks," reusing existing fork provenance and version history. Template push-back may return later as "diff against upstream template" on a fork.
+>
+> **Two — resolved: a dedicated upgrade review dialog, launched from the composition table.** It shows the library item's vN→vN+1 diff, lists every affected node, and confirms by producing a new pipeline version — the same amend-by-diff pattern the taskgraph already uses.
+>
+> **Three — resolved: approval and gate unlock are always two separate acts.** Auto-unlocking would erase who deliberately opened the gate from the audit trail. The approval toast may offer a one-click "Unlock `<edge>` now?" shortcut; it is still its own logged act.
+>
+> **Four — resolved: surface divergence, never reconcile.** At mirror-sync time, each linked issue↔work-order pair gets a divergence check (e.g., tracker issue closed while the work order is in-flight). Divergent pairs are badged **diverged** on both board halves and appear in the "Needs you" queue; a human resolves by acting on whichever side is wrong.
+>
+> **Five — resolved: compaction drops bodies, never structure.** Role, timings, status, cost and policy-decision strings are retained forever. The data-in/out pane renders an explicit "body compacted · metadata preserved" placeholder; replay is refused for runs containing compacted spans, with a refusal string in house style.
+
 ---
 
 *Local-only · single-user · token-scoped loopback API · specified against Surge App v9*
