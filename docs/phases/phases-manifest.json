@@ -1,1 +1,8 @@
-{"phases": []}
+{
+  "phases": [
+    {"id": "phase-0", "name": "The materialization loop", "status": "not_started", "doc": "phase-0/phase.md"},
+    {"id": "phase-1", "name": "Author: canvas & library", "status": "not_started", "doc": "phase-1/phase.md"},
+    {"id": "phase-2", "name": "Execute: boards & lifecycle", "status": "not_started", "doc": "phase-2/phase.md"},
+    {"id": "phase-3", "name": "Observe: observatory & operations", "status": "not_started", "doc": "phase-3/phase.md"}
+  ]
+}
