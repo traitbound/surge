@@ -20,8 +20,12 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 
 ## Layout
 
-- `docs/design.md` — V3 page-by-page product spec (source of the concept; open questions in its §23)
-- `Design.pdf` — original design export
+- `docs/product/spec.md` — persisted PRD (compact product layer)
+- `docs/product/architecture.md` — container diagram + ADRs
+- `docs/product/invariants.md` — INV-* rows; binding on all specs and code
+- `docs/product/code-map.md` — area → path → safe-parallel rules
+- `docs/features/INDEX.md` · `docs/phases/` — Layer 4/5 artefacts (empty until phase scoping)
+- `docs/design.md` — V3 page-by-page UI spec, the behavioural authority (§23 holds resolutions)
 - `ENGAGEMENT.md` — operational decisions (project type, repo shape, push/branch policy, ceremony tier)
 - `.halfcycle.json` — machine-readable projection of ENGAGEMENT decisions
 - `.claude/context/` — per-area agent context files (append-only)
@@ -60,4 +64,4 @@ Git rule: update CLAUDE.md **in the same commit** as the code change that makes 
 
 ## Must-knows recap
 
-Greenfield, solo (Tier 0, no gates). Monorepo, repo-canonical docs, hybrid push, per-task worktrees off `main`, no CI yet. Concept lives in `docs/design.md`; it is not yet complete — close §23 open questions before L4 specs.
+Greenfield, solo (Tier 0, no gates). Monorepo, repo-canonical docs, hybrid push, per-task worktrees off `main`, no CI yet. Rust server + React UI, `ts-rs` seam. Product layer is persisted under `docs/product/`; invariants there are binding. `docs/design.md` remains the detailed behavioural authority.

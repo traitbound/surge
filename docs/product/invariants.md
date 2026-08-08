@@ -1,0 +1,22 @@
+# Invariants
+
+Cross-cutting decisions captured once, referenced everywhere by ID. A rule belongs here iff all three: **cross-cutting** (bears on ≥2 places) · **load-bearing** (violating it breaks something real) · **stable** enough to name. Sources: `docs/design.md` §01–§06 and §23 Resolutions.
+
+Operations: add = next number in category, never reuse · update = append dated note and amend every referencing spec · retire = mark DEPRECATED, never delete.
+
+| ID | Rule | Rationale | Since |
+|---|---|---|---|
+| INV-AUTH-1 | Two credentials only: a human session token (full control) and a per-project runtime token limited to fetch pipeline · claim lease · heartbeat · append spans. The gap is enforced at the API, never in the UI. | Everything a machine may do must be a subset of what a human may do (design §04). | 2026-08-08 |
+| INV-AUTH-2 | A runtime-token call to any privileged endpoint is refused loudly and written to the audit log — never silently dropped. | Silent rejection hides probing and misconfiguration (design §04). | 2026-08-08 |
+| INV-AUTH-3 | Imported library items are untrusted until a human marks them reviewed; untrusted items never materialize, and compile is hard-blocked while any referenced item is untrusted. | Imports are the supply chain; compile is the approval point (design §04). | 2026-08-08 |
+| INV-DATA-1 | Exactly three things may be written into a bound workplace repo: `surge.yaml`, compiled `.claude/` runtime files, and docs at paths the pipeline's doc nodes declare. Closed list — extending it is a spec change. | The repo is the runtime's filesystem, not Surge's database (design §01). | 2026-08-08 |
+| INV-DATA-2 | Library items are immutable per version; pipelines pin a version and never move until explicitly bumped via the upgrade review. | Pinning is what makes a materialization hash meaningful (design §05, §23-Two). | 2026-08-08 |
+| INV-DATA-3 | Pipelines fork, never edit in place; blessed templates are untouched by forks, and project-canvas edits promote to a fork rather than pushing back. | Provenance and blast-radius control (design §05, §23-One). | 2026-08-08 |
+| INV-DATA-4 | An approved taskgraph is amended by diff, never re-expanded; done and in-flight work is never touched by an amendment. | Regeneration would orphan live work (design §05). | 2026-08-08 |
+| INV-DATA-5 | The Plan board is a read-only mirror; Plan and Ops never write each other's status. Contradictions are surfaced as a diverged badge and a "Needs you" item, never auto-reconciled. | Two writers to one status field is how boards lie (design §03, §23-Four). | 2026-08-08 |
+| INV-ID-1 | Every materialization is identified by a content hash, and every run records the materialization hash it executed under. Stale materialization → dispatch refused. | A run must always trace back to the exact graph that produced it (design §03, §06). | 2026-08-08 |
+| INV-ERR-1 | Every refusal (stale dispatch, token rejection, compile block, replay-on-compacted) produces a visible record — a run/span or audit entry carrying the reason string. Refuse loudly; never degrade silently. | Refusals are data; invisible refusals are bugs users can't report (design §06, §20). | 2026-08-08 |
+| INV-OBS-1 | Every privileged act (approve, gate unlock/relock, review, compile, abort, rotation, credential/egress edit, revision, replay, ratchet) writes an audit entry: action, subject, actor, when. | The audit trail is the product's memory of human intent (design §03). | 2026-08-08 |
+| INV-OBS-2 | Retention compaction may drop span bodies, never span structure — role, timings, status, cost and policy strings are kept forever; surfaces needing bodies show an explicit compacted placeholder, and replay is refused. | Metrics and traces must not decay into lies (§23-Five). | 2026-08-08 |
+| INV-NAME-1 | UI vocabulary from design §01 is binding across code, docs and copy: pipeline, library, materialization, work order, Board·Plan, Board·Ops, observatory. No synonyms. | Shared nouns are what keep four views of one object one object. | 2026-08-08 |
+| INV-DEPLOY-1 | Surge is one process, one static binary, bound to loopback (`127.0.0.1:7420`) only; hooks and stages get no network unless the host is on the project egress allowlist, checked at dispatch. | Local-only single-operator is the security model (design §01, §04). | 2026-08-08 |
