@@ -39,7 +39,8 @@ None yet — no build system exists. Add them here in the same commit that intro
 
 - Monorepo workspaces from day one; one package per deployable/major concern.
 - Vocabulary from `docs/design.md` §01 is binding: pipeline, library, materialization, work order, Board·Plan, Board·Ops, observatory. Don't invent synonyms.
-- Only three things may be written into a bound workplace repo (see design §01 closed exception list): `surge.yaml`, compiled `.claude/` runtime files, pipeline-declared docs.
+- Only four things may be written into a bound workplace repo (see design §01 closed exception list / INV-DATA-1): `surge.yaml`, compiled `.claude/` runtime files, pipeline-declared docs, rendered `work_orders/` files. Reads are closed too (INV-DATA-6): declared docs, `work_orders/`, git state.
+- Surge owns the actuator: a runtime supervisor spawns headless `claude -p` workers for leased issues (INV-EXEC-1, ADR-5); it never performs the creative work and never drives interactive sessions.
 
 ## Env var names
 

@@ -32,7 +32,7 @@ One operator, local machine, loopback only (`127.0.0.1:7420`). Multi-user, remot
 
 ## Architecture (prose)
 
-A single Rust binary serves everything on the loopback port. Inside it: an Axum HTTP API (human-token and runtime-token routes, enforced by middleware), a SQLite database (all twelve entities, runs/spans, audit), a materialization compiler that writes compiled files into bound workplace repos, a dispatcher/lease manager driving the execution lifecycle, a tracker mirror that reads external trackers (Linear/GitHub/built-in) and never writes back, and an SSE stream feeding the UI. The React UI is embedded in the binary and runs in the operator's browser; it is a pure projection of API state. IDE runtimes are thin clients: they fetch their compiled pipeline and work orders via the runtime token, claim leases, heartbeat, and append spans — nothing else. Bound repos receive exactly three kinds of writes: `surge.yaml`, compiled `.claude/` files, and pipeline-declared docs.
+A single Rust binary serves everything on the loopback port. Inside it: an Axum HTTP API (human-token and runtime-token routes, enforced by middleware), a SQLite database (all twelve entities, runs/spans, audit), a materialization compiler that writes compiled files into bound workplace repos, a dispatcher/lease manager driving the execution lifecycle, a runtime supervisor that spawns headless `claude -p` workers for dispatched issues (INV-EXEC-1 — interactive sessions stay human-launched and only claim leases), a repo I/O component owning the closed read path from bound repos (declared docs, `work_orders/`, git state for wave integration — INV-DATA-6), a tracker mirror that reads external trackers (Linear/GitHub/built-in) and never writes back, and an SSE stream feeding the UI. The React UI is embedded in the binary and runs in the operator's browser; it is a pure projection of API state. IDE runtimes are thin clients holding the runtime token's five capabilities: fetch their work order/lease/materialization hash at session start (the compiled `.claude/` files on disk are the pipeline itself), claim leases, heartbeat, append spans, and poll own-run status so aborts land at the next tool call — nothing else. Bound repos receive exactly four kinds of writes: `surge.yaml`, compiled `.claude/` files, pipeline-declared docs, and rendered `work_orders/` files (INV-DATA-1).
 
 See [`architecture.md`](architecture.md) for the diagram (must agree exactly with this paragraph) and ADRs.
 
@@ -40,5 +40,5 @@ See [`architecture.md`](architecture.md) for the diagram (must agree exactly wit
 
 - Multi-user, auth beyond the two-token model, remote/cloud deployment.
 - Writing to external trackers (Plan is mirror-only).
-- Executing agent work itself — runtimes execute; Surge compiles, dispatches, observes.
+- Performing the creative work itself — runtimes do the thinking; Surge compiles, dispatches, supervises worker processes, and observes. (Narrowed 2026-08-12, design §23-Six: Surge *does* spawn headless workers — without an actuator, dispatch semantics were fiction.)
 - Template push-back from project canvases (cut for v1 — promote-to-fork instead, design §23).

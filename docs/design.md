@@ -47,11 +47,14 @@ Surge runs as one local service on one port, for one operator. Everything below 
 
 > **Closed exception list — what may live in the code repo**
 >
-> Planning docs, pipelines, library items and boards live Surge-side. Only three things are written into the workplace repo.
+> Planning docs, pipelines, library items and boards live Surge-side. Only four things are written into the workplace repo (INV-DATA-1; the fourth added 2026-08-12 — §03 always required the file, the list had never been amended).
 >
 > 1. `surge.yaml` at the root — workspace binding, tracker choice, branch format, compiled step definitions. Never secrets.
 > 2. The compiled runtime files a materialization produces — `.claude/settings.json`, `.claude/agents/*.md`, `.claude/skills/*/SKILL.md`, `.claude/hooks/*.sh`.
 > 3. The docs the pipeline itself writes, at the paths its doc nodes declare — `docs/research.md` through `docs/taskgraph.md`.
+> 4. Rendered work-order files under `work_orders/` — one per dispatched issue, hash-checked against the issue on dispatch.
+>
+> Reads are equally closed (INV-DATA-6): declared doc paths (ingested and hashed after a doc node's run — the repo file is canonical, Surge's copy a projection), `work_orders/` for hash checks, and git state for wave integration. Nothing else in the repo is ever read.
 
 ---
 
@@ -93,6 +96,8 @@ Two nav groups in one persistent sidebar. The top group is instance-level and al
 ## 03 — Object model
 
 Twelve entities. Everything on every screen is one of these, or a projection of one.
+
+> Counts of shipped fixtures below ("three projects ship", "six runs ship", "seven hooks…") describe the prototype's demo data, not product requirements. The shipped *default library* (hooks, subagents, skills backing the doc chain) is normative; fixture projects and runs are illustrative.
 
 ### Project — *registry card · switcher · every project surface*
 
@@ -159,7 +164,7 @@ Two credentials, one boundary. Everything a machine may do is a subset of what a
 
 | Human session · `st_9f…c41` | Runtime · `rt_4a…e77` (per project) |
 | --- | --- |
-| Full control. Approve, unlock a gate, mark Gate-2 reviewed, review an import, compile, rotate tokens, abort. Bound to one browser; rotating signs the others out. | Fetch pipeline · claim lease · heartbeat · append spans. Nothing else. Approve, unlock and review endpoints reject it — a rejected write is refused loudly and lands in the audit log. |
+| Full control. Approve, unlock a gate, mark Gate-2 reviewed, review an import, compile, rotate tokens, abort. Bound to one browser; rotating signs the others out. | Fetch pipeline · claim lease · heartbeat · append spans · poll own-run status (the read that makes an abort land at the next tool call). Nothing else. Approve, unlock and review endpoints reject it — a rejected write is refused loudly and lands in the audit log. |
 
 > **Untrusted imports**
 >
@@ -176,7 +181,7 @@ Two credentials, one boundary. Everything a machine may do is a subset of what a
 > | network | which subagents hold WebSearch, or "none" |
 > | egress | the project allowlist, or "empty — all egress refused" |
 >
-> Hooks and shell stages run with no network unless the host is on the project's egress allowlist. The list is checked at dispatch and shown here. The dialog closes with the signature line: `sha256:a92f1c9…` · signed by `st_9f…c41` (this instance) · imports verify provenance.
+> Hooks and shell stages run with no network unless the host is on the project's egress allowlist. `127.0.0.1:7420` is implicitly exempt — Surge's own hooks (span emission, guards, status polls) must always reach Surge — and the report says so on the egress line rather than hiding it: *egress: empty — all egress refused (loopback to Surge always allowed)*. The list is checked at dispatch and shown here. The dialog closes with the signature line: `sha256:a92f1c9…` · signed by `st_9f…c41` (this instance) · imports verify provenance.
 
 ---
 
@@ -486,7 +491,7 @@ Two settings surfaces with a clean split: the instance owns the machine and the 
 | --- | --- |
 | APPEARANCE | Theme (Light \| Dark, "Dark keeps the single-accent palette") and Text size (Small · Default · Large · Larger, "Scales the whole interface, not just labels"). Scoped to this machine. |
 | SUBAGENTS | The full roster with description, tools and a per-subagent model select — the one place to re-model everything at once. The card states where the rest lives: "Tools and prompts are edited on the pipeline node that uses them." Open library sits in the corner. |
-| API TOKENS | The trust boundary, in the UI: one human session token with full control and one runtime token per project scoped to fetch · claim lease · heartbeat · append spans. Each rotatable. The card's subtitle is the rule (§04). |
+| API TOKENS | The trust boundary, in the UI: one human session token with full control and one runtime token per project scoped to fetch · claim lease · heartbeat · append spans · status poll. Each rotatable. The card's subtitle is the rule (§04). |
 | CREDENTIALS | GitHub (connect) and Linear (connected/disconnect, or disconnected/connect). "Surge-side only. Never written into a repo." Disconnecting Linear is what produces the degraded-tracker banner on every project bound to it. |
 | BACKUP | A freshness pill, last push time, Force backup push and Restore…, the scope line ("docs, pipelines, library items, boards, and work orders. Credentials never leave the machine; span bodies are opt-in"), and Span retention (30 · 60 · 90 days) with the retention rule: raw model and tool I/O compacts after the window, timings and cost are kept forever. |
 
@@ -712,6 +717,16 @@ What the prototype decides, what it fakes, and what is still open. Keeping these
 > **Four — resolved: surface divergence, never reconcile.** At mirror-sync time, each linked issue↔work-order pair gets a divergence check (e.g., tracker issue closed while the work order is in-flight). Divergent pairs are badged **diverged** on both board halves and appear in the "Needs you" queue; a human resolves by acting on whichever side is wrong.
 >
 > **Five — resolved: compaction drops bodies, never structure.** Role, timings, status, cost and policy-decision strings are retained forever. The data-in/out pane renders an explicit "body compacted · metadata preserved" placeholder; replay is refused for runs containing compacted spans, with a refusal string in house style.
+
+> **Resolutions — 2026-08-12** *(from the concept audit: four gaps where the model did not close)*
+>
+> **Six — resolved: Surge spawns headless workers; the "Surge doesn't execute" non-goal is narrowed, not kept.** §06 promised queue policy, max-parallel, automatic retries and wave budgets, but nothing launched a runtime — leases were claimed by workers that appeared from nowhere, and §16's dispatch kind (*interactive session | headless `claude -p`*) already leaked the answer. Resolution: the binary gains a **runtime supervisor** that spawns headless `claude -p` processes, one per dispatched issue holding a lease, up to the parallelism cap; each spawn records run id, materialization hash and work-order hash (INV-EXEC-1). Interactive sessions remain human-launched and simply claim leases; the supervisor never drives them. The non-goal is restated as: Surge never performs the *creative* work — it compiles, dispatches, supervises processes, and observes.
+>
+> **Seven — resolved: a closed read path from the bound repo, and doc canonicity settled.** Three mechanisms required reads the one-way `compiler → repo` arrow could not supply: the Docs drawer shows document text, work-order dispatch hash-checks `work_orders/`, and wave integration rebases branches. Resolution: the binary gains a **repo I/O** component owning exactly three reads (INV-DATA-6): declared doc paths, `work_orders/`, and git state. Doc canonicity: after a doc node's run, the *repo file* is canonical; repo I/O ingests and hashes it, and Surge's stored copy is the projection the drawer and gates read. This also settles what the runtime-token *fetch pipeline* endpoint is for: the compiled `.claude/` files on disk are the pipeline as far as the runtime's tooling is concerned — the fetch endpoint's real payload is the session's work order, lease assignment and materialization hash, which is what Phase 0 must prove.
+>
+> **Eight — resolved: hash inputs are defined by rule (INV-ID-2).** Semantic content only — nodes, edges, prompts, gates, fanout, pinned references. Positions, frames, stickies and collapse state never enter the hash; the known-lossy annotation round-trip therefore cannot break canvas↔code hash fidelity.
+>
+> **Nine — resolved: project-local edits get an identity the moment they exist (INV-ID-3).** Between an edit and a promote-to-fork, the project's graph was an unnamed divergence while the UI still claimed "v14". Resolution: the first local edit creates a project-local revision with its own content hash; the assignment line reads `v14 + local rev 9c4e…`, runs record that hash, and promote-to-fork adopts it as the fork's v1 provenance.
 
 ---
 

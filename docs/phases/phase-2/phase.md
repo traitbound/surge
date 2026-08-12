@@ -6,17 +6,17 @@
 
 ## Purpose
 
-Wire the execution half: the Plan/Ops board split, work orders, gates, leases and the full dispatch lifecycle from approved taskgraph to wave PR (design §06). Tests the assumption that Surge can *orchestrate* real runtimes — not just hand them files — with humans intervening at every named point.
+Wire the execution half: the Plan/Ops board split, work orders, gates, and the full dispatch lifecycle from approved taskgraph to wave PR (design §06). Phase 0 proved the actuator (single-task spawn, lease, abort — INV-EXEC-1); this phase adds the *policy* around it: queueing, waves, budgets, retries. Tests the assumption that Surge can orchestrate many real runtimes with humans intervening at every named point.
 
 ## In scope
 
 1. Board·Plan: read-only tracker mirror (GitHub + built-in tracker first; Linear behind an interface), Surge-own sprint/planning fields, divergence badge + "Needs you" queue (INV-DATA-5, design §23-Four).
 2. Board·Ops: issues from an approved taskgraph, work orders with revisions clearing Gate-2 review, hash-mismatch refusal (design §05).
 3. Gates: required-gate edges enforced at dispatch; unlock/relock as separate audited acts (design §23-Three).
-4. Dispatch: eligibility rules, priority-then-wave queue, max-parallel, stale-materialization refusal runs.
-5. Leases: claim, TTL, heartbeat, reclaim + retry queueing (design §06).
+4. Dispatch: eligibility rules, priority-then-wave queue, max-parallel spawning via the Phase 0 supervisor (INV-EXEC-1), stale-materialization refusal runs.
+5. Leases: retry queueing on reclaim, layered on Phase 0's claim/TTL/heartbeat mechanism (design §06).
 6. Implement→verify→retry loop with fanout and retry caps as graph edges.
-7. Wave integration issues: dependency-ordered rebase, contract checks, wave PR, conflict report.
+7. Wave integration issues: dependency-ordered rebase, contract checks, wave PR, conflict report — via the repo I/O component's git ops (INV-DATA-6), which also lands doc ingest and work-order hash checks here.
 8. Budgets and caps: wave budget, per-role caps, breach → pause + required gate; abort ledger semantics.
 9. SSE: heartbeat live-lines, span streaming, toasts.
 
@@ -43,7 +43,7 @@ Wire the execution half: the Plan/Ops board split, work orders, gates, leases an
 
 ## Architecture (this phase)
 
-Superset of Phase 1: adds dispatcher/lease manager, tracker mirror and SSE — reaching the full Layer 2 container set.
+Superset of Phase 1: adds dispatcher/lease manager (the supervisor grows from single-task to queue-driven), repo I/O, tracker mirror and SSE — reaching the full Layer 2 container set.
 
 ```mermaid
 graph TB
@@ -54,6 +54,8 @@ graph TB
         db[("SQLite (sqlx, WAL)<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         dispatcher["Dispatcher / lease manager<br/>eligibility · leases · budgets · aborts"]
+        supervisor["Runtime supervisor<br/>spawns headless claude -p workers<br/>(INV-EXEC-1)"]
+        repoio["Repo I/O<br/>doc ingest · work-order hash checks<br/>wave git ops (INV-DATA-6)"]
         mirror["Tracker mirror<br/>read-only inbound sync"]
         sse["SSE stream<br/>spans · heartbeats · toasts"]
         ui_assets["Embedded React UI<br/>rust-embed static assets"]
@@ -61,19 +63,24 @@ graph TB
 
     browser["React UI in browser<br/>+ Board·Plan · Board·Ops · live heartbeats"]
     runtime["Claude Code<br/>(runtime token)"]
-    repo[("Bound workplace repo<br/>surge.yaml · .claude/* · declared docs")]
+    repo[("Bound workplace repo<br/>surge.yaml · .claude/* · declared docs · work_orders/*")]
     tracker["External trackers<br/>GitHub · built-in (Linear: interface only)"]
 
     operator --> browser
     browser -->|"human token"| api
     ui_assets --> browser
     sse --> browser
-    runtime -->|"fetch pipeline · claim lease<br/>heartbeat · append spans"| api
+    dispatcher --> supervisor
+    supervisor -->|"spawns headless workers"| runtime
+    runtime -->|"fetch work order/lease · claim lease<br/>heartbeat · append spans · poll run status"| api
     api --> db
     compiler --> db
     dispatcher --> db
+    supervisor --> db
+    repoio --> db
     mirror --> db
     compiler -->|"writes compiled files"| repo
+    repoio -->|"closed read list: declared docs<br/>work_orders/ · git state"| repo
     mirror -->|"read only, never writes"| tracker
 ```
 
@@ -92,10 +99,10 @@ graph TB
 | budgets-aborts | wave budget, role caps, breach gate, abort ledger |
 | sse-streaming | event kinds, reconnect, UI subscriptions |
 
-Ten specs — at the rescope threshold. Run the `/halfcycle:phase-rescope` diagnostic before the spec sprint; expected split if needed: boards epic vs. lifecycle epic.
+Ten specs — at the rescope threshold. Run the `/halfcycle:phase-rescope` diagnostic before the spec sprint; expected split if needed: boards epic vs. lifecycle epic. **Relief valve if the phase must shrink** (audit 2026-08-12): Board·Plan is the weakest leg of the four-angle bet at n=1 operator — a read-only reskin of the tracker's own UI. `tracker-mirror` + `board-plan-ui` + the divergence check are the first candidates to defer to Phase 3; nothing in the lifecycle depends on them.
 
 ## Scoping assumptions
 
-- scoping assumption — verify at spec time: the Phase 0 lease endpoints (claim/heartbeat) need only TTL/reclaim semantics added, not a redesign.
+- scoping assumption — verify at spec time: the Phase 0 lease/supervisor mechanism (claim/TTL/heartbeat/abort) needs only retry queueing and the queue policy added, not a redesign.
 - scoping assumption — verify at spec time: wave integration can shell out to `git` in the bound repo without a libgit2 dependency.
 - scoping assumption — verify at spec time: GitHub mirroring is feasible poll-only (no webhooks) at single-operator scale.
