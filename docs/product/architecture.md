@@ -13,7 +13,7 @@ graph TB
         db[("SQLite (sqlx, WAL)<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         dispatcher["Dispatcher / lease manager<br/>eligibility · leases · budgets · aborts"]
-        supervisor["Runtime supervisor<br/>spawns headless claude -p workers<br/>(INV-EXEC-1)"]
+        supervisor["Runtime supervisor<br/>worktree per lease · spawns headless workers<br/>(INV-EXEC-1/2/3)"]
         repoio["Repo I/O<br/>doc ingest · work-order hash checks<br/>wave git ops (INV-DATA-6)"]
         mirror["Tracker mirror<br/>read-only inbound sync"]
         sse["SSE stream<br/>spans · heartbeats · toasts"]
@@ -24,6 +24,7 @@ graph TB
     runtime["IDE runtimes<br/>Claude Code · Cursor · Codex<br/>(runtime token)"]
     repo[("Bound workplace repos<br/>surge.yaml · .claude/* · declared docs · work_orders/*")]
     tracker["External trackers<br/>Linear · GitHub · built-in"]
+    stategit[("surge-state.git<br/>operator-configured backup remote")]
 
     operator --> browser
     browser -->|"human token"| api
@@ -41,11 +42,12 @@ graph TB
     compiler -->|"writes compiled files"| repo
     repoio -->|"closed read list: declared docs<br/>work_orders/ · git state"| repo
     mirror -->|"read only, never writes"| tracker
+    api -->|"backup push/pull · never tokens<br/>(design §23-Fifteen)"| stategit
 ```
 
 ## Reading the diagram
 
-Everything stateful lives in one SQLite file inside one Rust process. Repo traffic is deliberate and narrow in both directions: the compiler writes the four closed-list file kinds (INV-DATA-1), repo I/O reads the three closed-list sources (INV-DATA-6), and nothing is ever written to trackers. Headless workers exist only because the runtime supervisor spawned them for a leased issue (INV-EXEC-1); interactive sessions are human-launched and merely claim leases. The two inbound client kinds map to the two tokens: the browser UI holds the human token with full control; IDE runtimes hold a per-project runtime token limited to five capabilities — fetch work order/lease, claim lease, heartbeat, append spans, poll own-run status — the gap enforced at the API, never in the UI.
+Everything stateful lives in one SQLite file inside one Rust process. External traffic is deliberate and narrow in every direction: the compiler writes the four closed-list file kinds (INV-DATA-1, committed vs. gitignored per INV-DATA-7), repo I/O reads the three closed-list sources (INV-DATA-6), nothing is ever written to trackers, and the only other outbound path is the operator-configured backup remote — which never carries tokens. Headless workers exist only because the runtime supervisor spawned them for a leased issue (INV-EXEC-1); interactive sessions are human-launched and merely claim leases. The two inbound client kinds map to the two tokens: the browser UI holds the human token with full control; IDE runtimes hold a per-project runtime token limited to five capabilities — fetch work order/lease, claim lease, heartbeat, append spans, poll own-run status — the gap enforced at the API, never in the UI.
 
 ## ADRs
 
@@ -78,3 +80,13 @@ Everything stateful lives in one SQLite file inside one Rust process. Repo traff
 **Decision:** all reads from bound repos go through one component with a closed list (INV-DATA-6): declared doc paths (ingested + hashed after a doc node's run; the repo file is canonical, Surge's copy the projection), `work_orders/` for hash-mismatch checks, and git state (shelling out to `git`) for wave integration.
 **Alternatives rejected:** Surge-canonical docs with write-back (contradicts "the repo is the runtime's filesystem" and doubles the write surface); ad-hoc reads wherever needed (unauditable; the write list's discipline would be one-directional hypocrisy).
 **Why:** the Docs drawer, work-order refusal and wave assembly each require reads the old one-way `compiler → repo` arrow could not supply; a single owned component keeps reads as reviewable as writes. (design §23-Seven)
+
+### ADR-7 — Worktree-per-lease worker isolation
+**Decision:** claiming a lease creates a git worktree on the issue's task branch; the supervisor spawns the worker inside it, compiles the materialization into it (compiled files are gitignored per INV-DATA-7), and reaps it at lease end (INV-EXEC-2).
+**Alternatives rejected:** shared working directory (parallel workers clobber each other; "max 3 parallel" would be unsafe by construction); full clones per worker (disk and clone latency for no isolation gain over worktrees).
+**Why:** worktrees give branch-isolated filesystems sharing one object store — exactly the wave-integration model, which rebases the task branches the worktrees produced. (design §23-Ten)
+
+### ADR-8 — Claude Code plugin over MCP as the runtime integration
+**Decision:** the primary runtime integration is a Claude Code plugin (`integrations/claude-plugin/`) bundling an MCP server that exposes the five runtime-token capabilities as typed tools plus the span/guard hooks; compiled `.claude/settings.json` registers it. Raw hook-script HTTP glue is the fallback for MCP-less runtimes.
+**Alternatives rejected:** hook-scripts-only (shell glue, no typed contract, fragile across runtime versions — kept only as fallback); forking or wrapping the runtime binary (maintenance treadmill, breaks "runtimes are thin clients").
+**Why:** Claude Code speaks MCP natively, so the riskiest Phase 0 assumption (hooks can implement fetch/spans/abort-poll) gets a supported protocol instead of curl; and one MCP server is the reusable template for the post-V3 Cursor/Codex adapters. (design §23-Eighteen)

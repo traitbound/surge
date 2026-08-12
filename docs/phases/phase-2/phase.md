@@ -15,10 +15,11 @@ Wire the execution half: the Plan/Ops board split, work orders, gates, and the f
 3. Gates: required-gate edges enforced at dispatch; unlock/relock as separate audited acts (design §23-Three).
 4. Dispatch: eligibility rules, priority-then-wave queue, max-parallel spawning via the Phase 0 supervisor (INV-EXEC-1), stale-materialization refusal runs.
 5. Leases: retry queueing on reclaim, layered on Phase 0's claim/TTL/heartbeat mechanism (design §06).
-6. Implement→verify→retry loop with fanout and retry caps as graph edges.
+6. Implement→verify→retry loop with fanout and retry caps as graph edges; pass/fail and budget transitions derive from Surge-observed facts (exit codes, stage results, supervisor metering), never span content (INV-EXEC-3). Workers run isolated worktree-per-lease (INV-EXEC-2).
 7. Wave integration issues: dependency-ordered rebase, contract checks, wave PR, conflict report — via the repo I/O component's git ops (INV-DATA-6), which also lands doc ingest and work-order hash checks here.
-8. Budgets and caps: wave budget, per-role caps, breach → pause + required gate; abort ledger semantics.
+8. Budgets and caps: wave budget, per-role caps, supervisor-side cost metering (unmeterable run → treated over-cap, INV-EXEC-3), breach → pause + required gate; abort ledger semantics.
 9. SSE: heartbeat live-lines, span streaming, toasts.
+10. Claude Code plugin: full MCP tool surface (work-order fetch, lease claim) added to the Phase 0 skeleton (design §23-Eighteen).
 
 ## Out of scope
 
@@ -54,7 +55,7 @@ graph TB
         db[("SQLite (sqlx, WAL)<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         dispatcher["Dispatcher / lease manager<br/>eligibility · leases · budgets · aborts"]
-        supervisor["Runtime supervisor<br/>spawns headless claude -p workers<br/>(INV-EXEC-1)"]
+        supervisor["Runtime supervisor<br/>worktree per lease · spawns headless workers<br/>(INV-EXEC-1/2/3)"]
         repoio["Repo I/O<br/>doc ingest · work-order hash checks<br/>wave git ops (INV-DATA-6)"]
         mirror["Tracker mirror<br/>read-only inbound sync"]
         sse["SSE stream<br/>spans · heartbeats · toasts"]
@@ -62,7 +63,7 @@ graph TB
     end
 
     browser["React UI in browser<br/>+ Board·Plan · Board·Ops · live heartbeats"]
-    runtime["Claude Code<br/>(runtime token)"]
+    runtime["Claude Code + surge plugin (MCP)<br/>(runtime token via env / surge auth)"]
     repo[("Bound workplace repo<br/>surge.yaml · .claude/* · declared docs · work_orders/*")]
     tracker["External trackers<br/>GitHub · built-in (Linear: interface only)"]
 
@@ -98,6 +99,7 @@ graph TB
 | wave-integration | rebase order, contract checks, wave PR, conflict report |
 | budgets-aborts | wave budget, role caps, breach gate, abort ledger |
 | sse-streaming | event kinds, reconnect, UI subscriptions |
+| claude-plugin-full | MCP work-order fetch + lease-claim tools on the Phase 0 skeleton |
 
 Ten specs — at the rescope threshold. Run the `/halfcycle:phase-rescope` diagnostic before the spec sprint; expected split if needed: boards epic vs. lifecycle epic. **Relief valve if the phase must shrink** (audit 2026-08-12): Board·Plan is the weakest leg of the four-angle bet at n=1 operator — a read-only reskin of the tracker's own UI. `tracker-mirror` + `board-plan-ui` + the divergence check are the first candidates to defer to Phase 3; nothing in the lifecycle depends on them.
 

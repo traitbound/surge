@@ -16,7 +16,7 @@ Close the loop from execution back into authoring: the Observatory (waterfall, C
 4. Metrics: the three measured (status, latency, cost) and cost-by-role rollups (design §06). The metrics rail ships with the measured trio and the §16 honesty note; the provisional slots render as "not yet measured — COE labels accumulating".
 5. Replay and the pipeline debugger (topological stepping, breakpoints) with their calibration disclaimers.
 6. Retention/compaction: bodies compacted per policy, structure kept forever, compacted placeholders, replay refusal (INV-OBS-2, design §23-Five).
-7. Settings, both levels: appearance, subagent roster, tokens + rotation, credentials, egress allowlist editor, backup/restore (design §17).
+7. Settings, both levels: appearance, subagent roster, tokens + rotation, credentials, egress allowlist editor, backup/restore to the operator-configured `surge-state.git` remote — tokens never included, restore re-mints runtime tokens and requires a fresh session claim via the one-time URL (design §23-Fifteen/Sixteen, INV-AUTH-4/5).
 8. Empty/degraded/refusal state pass across all surfaces (design §20–§21 copy inventory).
 
 ## Out of scope
@@ -52,7 +52,7 @@ graph TB
         db[("SQLite (sqlx, WAL)<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         dispatcher["Dispatcher / lease manager<br/>eligibility · leases · budgets · aborts"]
-        supervisor["Runtime supervisor<br/>spawns headless claude -p workers<br/>(INV-EXEC-1)"]
+        supervisor["Runtime supervisor<br/>worktree per lease · spawns headless workers<br/>(INV-EXEC-1/2/3)"]
         repoio["Repo I/O<br/>doc ingest · work-order hash checks<br/>wave git ops (INV-DATA-6)"]
         mirror["Tracker mirror<br/>read-only inbound sync"]
         sse["SSE stream<br/>spans · heartbeats · toasts"]
@@ -60,7 +60,7 @@ graph TB
     end
 
     browser["React UI in browser<br/>+ Observatory · Docs · Settings · full copy pass"]
-    runtime["Claude Code<br/>(runtime token)"]
+    runtime["Claude Code + surge plugin (MCP)<br/>(runtime token via env / surge auth)"]
     repo[("Bound workplace repo<br/>surge.yaml · .claude/* · declared docs · work_orders/*")]
     tracker["External trackers<br/>GitHub · built-in"]
 

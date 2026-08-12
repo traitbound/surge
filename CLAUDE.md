@@ -29,7 +29,7 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 - `ENGAGEMENT.md` — operational decisions (project type, repo shape, push/branch policy, ceremony tier)
 - `.halfcycle.json` — machine-readable projection of ENGAGEMENT decisions
 - `.claude/context/` — per-area agent context files (append-only)
-- Code will land as a cargo workspace under `crates/` (server) plus `ui/` (Vite app) when scaffolded
+- Code will land as a cargo workspace under `crates/` (server, cli) plus `ui/` (Vite app) and `integrations/claude-plugin/` (Claude Code plugin: MCP server + hooks, ADR-8) when scaffolded
 
 ## Key commands
 

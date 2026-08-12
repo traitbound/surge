@@ -17,9 +17,10 @@ No visual editor in this phase: pipelines are defined as data (checked-in JSON/R
 3. Token middleware: human session token + per-project runtime token; runtime token limited to the five capabilities — fetch work order/lease · claim lease · heartbeat · append spans · poll own-run status (INV-AUTH-1); loud refusal + audit entry on violation (INV-AUTH-2, INV-ERR-1).
 4. Project binding: register a repo path, write `surge.yaml` (INV-DATA-1).
 5. Materialization compiler: pipeline (data-defined) × project → `.claude/` files + `surge.yaml` step blocks, content-hashed per INV-ID-2 (semantic content only); stale detection refuses dispatch (INV-ID-1).
-6. Runtime API + a Claude Code integration recipe (hooks/settings the compiled output installs) proving run → spans-back against one real repo. The compiled `.claude/` files on disk are the pipeline; the fetch endpoint carries work order, lease and materialization hash (design §23-Seven).
-7. **Minimal runtime supervisor** (INV-EXEC-1, single-task — no queue, waves or budgets): dispatch one issue → spawn one headless `claude -p` worker → lease with TTL + heartbeat → reclaim on silence → abort lands at the next tool call via the status poll.
-8. Minimal embedded UI: project list, compile button, dispatch/abort on one fixture issue, runs list with span tree (read-only, polling — no SSE yet).
+6. Runtime API + the **Claude Code plugin skeleton** (`integrations/claude-plugin/`, design §23-Eighteen / ADR-8): an MCP server exposing span-append, heartbeat and status-poll tools, registered by the compiled `.claude/settings.json`; hook-script HTTP glue as documented fallback. Proves run → spans-back against one real repo. The compiled `.claude/` files on disk are the pipeline; the fetch endpoint carries work order, lease and materialization hash (design §23-Seven).
+7. **Minimal runtime supervisor** (INV-EXEC-1/2, single-task — no queue, waves or budgets): dispatch one issue → create a git worktree on the task branch, compile the materialization into it (gitignored per INV-DATA-7) → spawn one headless `claude -p` worker inside it with the runtime token injected as an env var (INV-AUTH-4) → lease with TTL + heartbeat → reclaim on silence → abort lands at the next tool call via the status poll → reap the worktree. Both run kinds (doc run, work-order run — design §23-Fourteen) exist on the Run entity; Phase 0 exercises one of each.
+8. **Thin `surge` CLI**: `auth` (one-time session-claim URL flow, INV-AUTH-5), `status`, `compile`, `dispatch`, `abort` — the first-run path and the testable surface before the UI matures.
+9. Minimal embedded UI: project list, compile button, dispatch/abort on one fixture issue, runs list with span tree (read-only, polling — no SSE yet).
 
 ## Out of scope
 
@@ -36,10 +37,11 @@ No visual editor in this phase: pipelines are defined as data (checked-in JSON/R
 
 ## Done when
 
-- `cargo build` yields one binary; opening `127.0.0.1:7420` shows the project list from the embedded UI.
+- `cargo build` yields one binary; first launch prints the one-time claim URL, and only the browser that visits it holds a session (INV-AUTH-5) — opening `127.0.0.1:7420` cold shows the claim prompt, not the project list.
 - Binding a real repo writes `surge.yaml` and nothing else; compiling writes only the closed-list files (INV-DATA-1), and the materialization row shows its hash.
 - Editing the pipeline fixture and re-compiling produces a new hash; dispatching against the old one is refused with a visible refusal run (INV-ERR-1).
-- Dispatching one fixture issue spawns a headless `claude -p` worker that fetches its work order with the runtime token, runs a two-node pipeline (one doc node, one agent node), and its spans appear in the runs list with role, timing and status.
+- Dispatching one fixture issue creates a worktree on the task branch and spawns a headless `claude -p` worker inside it; the worker's MCP tools (from the plugin skeleton) fetch its work order, append spans, and heartbeat; a two-node pipeline (one doc node, one agent node) runs and its spans appear with role, timing and status; the worktree is reaped at lease end (INV-EXEC-2).
+- The compiled `.claude/` and `work_orders/` files are gitignored via the surge-managed block; `surge.yaml` and the doc node's output are committable (INV-DATA-7).
 - Killing the worker mid-run reclaims the lease at TTL; pressing Abort lands at the worker's next tool call via the status poll, and both leave visible records (INV-ERR-1).
 - A runtime-token call to a human endpoint (e.g. compile) is rejected and the audit table records it.
 - Generated TypeScript types in `ui/` come from `crates/domain` with no hand-written duplicates.
@@ -56,12 +58,12 @@ graph TB
         api["Axum HTTP API<br/>human-token & runtime-token routes<br/>(middleware-enforced boundary)"]
         db[("SQLite (sqlx, WAL)<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
-        supervisor["Runtime supervisor (single-task)<br/>spawn · lease TTL · abort<br/>(INV-EXEC-1)"]
+        supervisor["Runtime supervisor (single-task)<br/>worktree per lease · spawn · TTL · abort<br/>(INV-EXEC-1/2)"]
         ui_assets["Embedded React UI<br/>rust-embed static assets"]
     end
 
     browser["React UI in browser<br/>project list · compile · dispatch/abort · runs (polling)"]
-    runtime["Claude Code<br/>(runtime token)"]
+    runtime["Claude Code + surge plugin (MCP)<br/>(runtime token via env)"]
     repo[("Bound workplace repo<br/>surge.yaml · .claude/* · work_orders/*")]
 
     operator --> browser
@@ -84,14 +86,16 @@ graph TB
 | token-boundary | middleware, two token kinds, refusal + audit write path |
 | project-binding | register repo, surge.yaml write, closed-list write guard |
 | compiler-core | data-defined pipeline → hashed materialization → file writes, stale detection |
-| runtime-api | five runtime-token endpoints (work order/lease fetch, claim, heartbeat, spans, status poll) + Claude Code integration recipe |
-| supervisor-minimal | single-task spawn of headless claude -p, lease TTL/reclaim, abort-at-next-tool-call |
+| runtime-api | five runtime-token endpoints (work order/lease fetch, claim, heartbeat, spans, status poll) |
+| claude-plugin-mcp | plugin skeleton: MCP server (span/heartbeat/status tools), settings.json registration, hook-glue fallback |
+| supervisor-minimal | single-task worktree-per-lease spawn of headless claude -p, env token injection, lease TTL/reclaim, abort-at-next-tool-call, worktree reap |
+| cli-thin | surge auth (claim URL), status, compile, dispatch, abort |
 | minimal-shell-ui | project list, compile action, dispatch/abort, runs/span tree, polling |
 
 ## Scoping assumptions
 
-- scoping assumption — verify at spec time: Claude Code can be configured (via compiled `.claude/settings.json` hooks) to call a local HTTP endpoint at session start and per tool-use, sufficient to implement fetch-at-start, span reporting and the abort-status poll without forking the runtime.
-- scoping assumption — verify at spec time: a headless `claude -p` process spawned by Surge inherits the repo's compiled `.claude/` config and can run a multi-node pipeline non-interactively (permissions, tool allowlist, exit semantics).
+- scoping assumption — verify at spec time: a Claude Code plugin can bundle an MCP server whose tools cover fetch-at-start, span reporting, heartbeat and the abort-status poll, registered via compiled `.claude/settings.json`, without forking the runtime (ADR-8). Fallback if any tool is uncoverable: the hook-script HTTP glue for that piece.
+- scoping assumption — verify at spec time: a headless `claude -p` process spawned by Surge in a fresh worktree inherits the worktree's compiled `.claude/` config (including plugin/MCP registration) and can run a multi-node pipeline non-interactively (permissions, tool allowlist, exit semantics).
 - scoping assumption — verify at spec time: `ts-rs` covers all twelve entity shapes (incl. tagged enums for node kinds) without hand-written TS patches.
 - scoping assumption — verify at spec time: sqlx compile-time checking works acceptably with an in-repo `.sqlx` offline cache given no CI.
 - Greenfield: no claims about existing code exist; all `file:line` anchors will be minted at Layer 4.

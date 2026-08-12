@@ -50,12 +50,12 @@ graph TB
         api["Axum HTTP API<br/>human-token & runtime-token routes<br/>(middleware-enforced boundary)"]
         db[("SQLite (sqlx, WAL)<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
-        supervisor["Runtime supervisor (single-task)<br/>spawn · lease TTL · abort<br/>(INV-EXEC-1)"]
+        supervisor["Runtime supervisor (single-task)<br/>worktree per lease · spawn · TTL · abort<br/>(INV-EXEC-1/2)"]
         ui_assets["Embedded React UI<br/>rust-embed static assets"]
     end
 
     browser["React UI in browser<br/>+ React Flow canvas · library · compile dialog"]
-    runtime["Claude Code<br/>(runtime token)"]
+    runtime["Claude Code + surge plugin (MCP)<br/>(runtime token via env / surge auth)"]
     repo[("Bound workplace repo<br/>surge.yaml · .claude/* · work_orders/*")]
 
     operator --> browser
