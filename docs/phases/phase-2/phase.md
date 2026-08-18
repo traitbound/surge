@@ -51,7 +51,7 @@ graph TB
 
     subgraph binary["Surge binary — Rust · 127.0.0.1:7420"]
         api["Axum HTTP API<br/>human-token & runtime-token routes<br/>(middleware-enforced boundary)"]
-        db[("SQLite (sqlx, WAL)<br/>entities · runs/spans · audit")]
+        db[("SurrealDB — embedded, in-process<br/>graph · document · vector, one ACID boundary<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         dispatcher["Dispatcher / lease manager<br/>eligibility · leases · budgets · aborts"]
         mirror["Tracker mirror<br/>read-only inbound sync"]
@@ -90,7 +90,7 @@ graph TB
 | lease-manager | claim/TTL/heartbeat/reclaim, retry queueing |
 | wave-integration | rebase order, contract checks, wave PR, conflict report |
 | budgets-aborts | wave budget, role caps, breach gate, abort ledger |
-| sse-streaming | event kinds, reconnect, UI subscriptions |
+| sse-streaming | `LIVE SELECT` subscriptions → SSE bridge, event kinds, reconnect, UI subscriptions |
 
 Ten specs — at the rescope threshold. Run the `/halfcycle:phase-rescope` diagnostic before the spec sprint; expected split if needed: boards epic vs. lifecycle epic.
 

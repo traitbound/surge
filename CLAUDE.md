@@ -12,7 +12,8 @@
 
 Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.0.0.1:7420`, shipped as one static binary.
 
-- **Server: Rust** — Axum (tower middleware enforces the human-token/runtime-token boundary), SQLite via `sqlx` (compile-time-checked queries, WAL mode), `serde`, `sha2` for content hashing.
+- **Server: Rust** — Axum (tower middleware enforces the human-token/runtime-token boundary), SurrealDB embedded in-process (`surrealdb` crate, `kv-rocksdb`; no second process, no network listener), `serde`, `sha2` for content hashing.
+- **Store discipline:** SurrealQL is not compile-time checked. Every query lives in `crates/store` behind a typed repository function and carries a `kv-mem` integration test — that test suite is the replacement for what `sqlx` checked at build time. Non-negotiable on lease, gate, trust and hash paths (ADR-2).
 - **UI: React + Vite** — React Flow (`@xyflow/react`) for the pipeline canvas, TanStack Router/Query, Tailwind. UI is a projection of server state; all rules enforced at the API.
 - **Type seam: `ts-rs`** — Rust structs are the single source of truth for the object model; TypeScript types are generated from them at build time.
 - **Realtime: SSE** (`axum::response::sse`) for span streaming, heartbeats, toasts.
@@ -64,4 +65,4 @@ Git rule: update CLAUDE.md **in the same commit** as the code change that makes 
 
 ## Must-knows recap
 
-Greenfield, solo (Tier 0, no gates). Monorepo, repo-canonical docs, hybrid push, per-task worktrees off `main`, no CI yet. Rust server + React UI, `ts-rs` seam. Product layer is persisted under `docs/product/`; invariants there are binding. `docs/design.md` remains the detailed behavioural authority.
+Greenfield, solo (Tier 0, no gates). Monorepo, repo-canonical docs, hybrid push, per-task worktrees off `main`, no CI yet. Rust server + React UI, `ts-rs` seam, embedded SurrealDB as the single store. Product layer is persisted under `docs/product/`; invariants there are binding. `docs/design.md` remains the detailed behavioural authority.
