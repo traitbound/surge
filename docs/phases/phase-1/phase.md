@@ -48,7 +48,7 @@ graph TB
 
     subgraph binary["Surge binary — Rust · 127.0.0.1:7420"]
         api["Axum HTTP API<br/>human-token & runtime-token routes<br/>(middleware-enforced boundary)"]
-        db[("SQLite (sqlx, WAL)<br/>entities · runs/spans · audit")]
+        db[("SurrealDB — embedded, in-process<br/>graph · document · vector, one ACID boundary<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         supervisor["Runtime supervisor (single-task)<br/>worktree per lease · spawn · TTL · abort<br/>(INV-EXEC-1/2)"]
         ui_assets["Embedded React UI<br/>rust-embed static assets"]

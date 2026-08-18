@@ -49,7 +49,7 @@ graph TB
 
     subgraph binary["Surge binary — Rust · 127.0.0.1:7420"]
         api["Axum HTTP API<br/>human-token & runtime-token routes<br/>(middleware-enforced boundary)"]
-        db[("SQLite (sqlx, WAL)<br/>entities · runs/spans · audit")]
+        db[("SurrealDB — embedded, in-process<br/>graph · document · vector, one ACID boundary<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         dispatcher["Dispatcher / lease manager<br/>eligibility · leases · budgets · aborts"]
         supervisor["Runtime supervisor<br/>worktree per lease · spawns headless workers<br/>(INV-EXEC-1/2/3)"]
@@ -98,4 +98,5 @@ graph TB
 ## Scoping assumptions
 
 - scoping assumption — verify at spec time: replay can be implemented as re-dispatch of a recorded span's input against the same materialization hash, without a live process attachment.
-- scoping assumption — verify at spec time: SQLite is adequate for span-body compaction in place (UPDATE-and-vacuum) without a separate blob store.
+- scoping assumption — verify at spec time: compacting a span body is an `UPDATE` clearing the body fields, with RocksDB reclaiming the space on its own compaction, and no separate blob store is needed.
+- scoping assumption — verify at spec time: **nothing at the engine level retains a compacted body** — no changefeed window, no version history, no index copy. INV-OBS-2 requires the bodies actually gone, so a store that quietly keeps them makes the retention promise a lie. This is the reason ADR-2 chose RocksDB over versioned SurrealKV.
