@@ -10,8 +10,8 @@ Wire the execution half: the Plan/Ops board split, work orders, gates, and the f
 
 ## In scope
 
-1. Board·Plan: read-only tracker mirror (GitHub + built-in tracker first; Linear behind an interface), Surge-own sprint/planning fields, divergence badge + "Needs you" queue (INV-DATA-5, design §23-Four).
-2. Board·Ops: issues from an approved taskgraph, work orders with revisions clearing Gate-2 review, hash-mismatch refusal (design §05).
+1. Board·Plan: read-only tracker mirror (GitHub + built-in tracker first; Linear behind an interface), Surge-own sprint/planning fields, divergence badge (INV-DATA-5, design §23-Four). The built-in tracker is writable Plan per design §23-Twenty: issue create/edit writes tracker records, never orchestration status.
+2. Board·Ops: issues from an approved taskgraph, work orders with revisions clearing Gate-2 review, hash-mismatch refusal (design §05). Includes a **minimal taskgraph-approval path** — `surge approve` + API + a bare approve action on the doc row — since the full Docs surface is Phase 3 and this phase's lifecycle starts at approval.
 3. Gates: required-gate edges enforced at dispatch; unlock/relock as separate audited acts (design §23-Three).
 4. Dispatch: eligibility rules, priority-then-wave queue, max-parallel spawning via the Phase 0 supervisor (INV-EXEC-1), stale-materialization refusal runs.
 5. Leases: retry queueing on reclaim, layered on Phase 0's claim/TTL/heartbeat mechanism (design §06).
@@ -20,6 +20,10 @@ Wire the execution half: the Plan/Ops board split, work orders, gates, and the f
 8. Budgets and caps: wave budget, per-role caps, supervisor-side cost metering (unmeterable run → treated over-cap, INV-EXEC-3), breach → pause + required gate; abort ledger semantics.
 9. SSE: heartbeat live-lines, span streaming, toasts.
 10. Claude Code plugin: full MCP tool surface (work-order fetch, lease claim) added to the Phase 0 skeleton (design §23-Eighteen).
+11. **Registry + "Needs you" queue** (design §08): card grid with board-health badges, search, empty states, and the queue with its four jump conditions — this phase raises the conditions (divergence, blocked gates, stale dispatch, failed runs), so it owns the surface that shows them.
+12. **Run overlay** on the project canvas (design §11) — the first phase with real run data to paint.
+13. **Model-routing fallback behaviour** (design §17): after two failed retries on 429/5xx the dispatcher re-runs on the configured fallback model, emitting the `escalate_on_repeat_failure` policy string; per-role caps enforce with budgets (8). Config-file only here — the settings card is Phase 3.
+14. **Egress enforcement, two-tier** (design §23-Nineteen, INV-DEPLOY-1): supervisor-spawned stage/worker processes run network-sandboxed to loopback + allowlist; runtime-side hooks are declared + audited. Checked at dispatch.
 
 ## Out of scope
 
@@ -28,7 +32,7 @@ Wire the execution half: the Plan/Ops board split, work orders, gates, and the f
 - Retention/compaction → Phase 3
 - Settings surfaces, backup/restore, token rotation UI → Phase 3
 - Linear mirror implementation (interface only, GitHub + built-in shipped) → Phase 3 or later
-- Egress allowlist *editor* (checked at dispatch from config) → Phase 3
+- Egress allowlist *editor* → Phase 3 (enforcement itself lands here — in-scope 14)
 - Doc-chain surface (Project·Docs reading drawer, parent-change badges UI) → Phase 3; doc gate *data* participates in eligibility here
 - Multi-runtime support beyond Claude Code (Cursor, Codex) → post-Phase 3
 
@@ -100,11 +104,15 @@ graph TB
 | budgets-aborts | wave budget, role caps, breach gate, abort ledger |
 | sse-streaming | `LIVE SELECT` subscriptions → SSE bridge, event kinds, reconnect, UI subscriptions |
 | claude-plugin-full | MCP work-order fetch + lease-claim tools on the Phase 0 skeleton |
+| registry-needs-you | §08 card grid, health badges, the four-condition queue with jumps |
+| run-overlay | latest-run paint on the project canvas: per-node duration/cost/status |
+| routing-fallback-egress | 429/5xx fallback-model retry + policy string; two-tier egress sandbox at spawn |
 
-Eleven specs — over the rescope threshold. Run the `/halfcycle:phase-rescope` diagnostic before the spec sprint; expected split if needed: boards epic vs. lifecycle epic. **Relief valve if the phase must shrink** (audit 2026-08-12): Board·Plan is the weakest leg of the four-angle bet at n=1 operator — a read-only reskin of the tracker's own UI. `tracker-mirror` + `board-plan-ui` + the divergence check are the first candidates to defer to Phase 3; nothing in the lifecycle depends on them.
+Fourteen specs — well over the rescope threshold (grown by the 2026-08-23 coverage audit: Registry/"Needs you", run overlay, routing fallback and egress enforcement previously had no owner). Run the `/halfcycle:phase-rescope` diagnostic before the spec sprint; expected split if needed: boards epic vs. lifecycle epic. **Relief valve if the phase must shrink** (audit 2026-08-12): Board·Plan is the weakest leg of the four-angle bet at n=1 operator — a read-only reskin of the tracker's own UI. `tracker-mirror` + `board-plan-ui` + the divergence check are the first candidates to defer to Phase 3; nothing in the lifecycle depends on them.
 
 ## Scoping assumptions
 
 - scoping assumption — verify at spec time: the Phase 0 lease/supervisor mechanism (claim/TTL/heartbeat/abort) needs only retry queueing and the queue policy added, not a redesign.
 - scoping assumption — verify at spec time: wave integration can shell out to `git` in the bound repo without a libgit2 dependency.
 - scoping assumption — verify at spec time: GitHub mirroring is feasible poll-only (no webhooks) at single-operator scale.
+- scoping assumption — verify at spec time: an OS-level network sandbox (macOS Seatbelt first) can wrap supervisor-spawned stage/worker processes allowing only loopback `:7420` + the allowlist; where no facility exists, the tier degrades visibly to declared + audited (design §23-Nineteen).

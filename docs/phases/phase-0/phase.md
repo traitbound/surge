@@ -20,11 +20,12 @@ No visual editor in this phase: pipelines are defined as data (checked-in JSON/R
 6. Runtime API + the **Claude Code plugin skeleton** (`integrations/claude-plugin/`, design §23-Eighteen / ADR-8): an MCP server exposing span-append, heartbeat and status-poll tools, registered by the compiled `.claude/settings.json`; hook-script HTTP glue as documented fallback. Proves run → spans-back against one real repo. The compiled `.claude/` files on disk are the pipeline; the fetch endpoint carries work order, lease and materialization hash (design §23-Seven).
 7. **Minimal runtime supervisor** (INV-EXEC-1/2, single-task — no queue, waves or budgets): dispatch one issue → create a git worktree on the task branch, compile the materialization into it (gitignored per INV-DATA-7) → spawn one headless `claude -p` worker inside it with the runtime token injected as an env var (INV-AUTH-4) → lease with TTL + heartbeat → reclaim on silence → abort lands at the next tool call via the status poll → reap the worktree. Both run kinds (doc run, work-order run — design §23-Fourteen) exist on the Run entity; Phase 0 exercises one of each.
 8. **Thin `surge` CLI**: `auth` (one-time session-claim URL flow, INV-AUTH-5), `status`, `compile`, `dispatch`, `abort` — the first-run path and the testable surface before the UI matures.
-9. Minimal embedded UI: project list, compile button, dispatch/abort on one fixture issue, runs list with span tree (read-only, polling — no SSE yet).
+9. Minimal embedded UI **including the global shell** (design §07: sidebar, project switcher, toast/dialog layers — the frame every later surface mounts into): project list, compile button, dispatch/abort on one fixture issue, runs list with span tree (read-only, polling — no SSE yet).
+10. **Default library seed** (design §03 — the shipped library is normative product content, not fixture data): the minimum items the Phase 0 two-node pipeline needs — one doc skill, one subagent, span emission via the plugin. The full seven-hook · six-subagent · seven-skill set is authored in Phase 1, where the library surfaces it ships in exist.
 
 ## Out of scope
 
-- Pipeline editor canvas, all four canvas modes, blocks, undo/redo → Phase 1
+- Pipeline editor canvas, blocks, undo/redo → Phase 1. Canvas modes split by data availability: dry run + diff overlay → Phase 1 · run overlay → Phase 2 (first real run data) · debugger → Phase 3
 - Library surfaces, versioning UI, trust/import review → Phase 1 (trust *enforcement* data model lands here, dormant)
 - Board·Plan mirror and tracker connections → Phase 2
 - Board·Ops: work orders, gates, Gate-2 review, taskgraph → Phase 2
@@ -92,7 +93,8 @@ graph TB
 | claude-plugin-mcp | plugin skeleton: MCP server (span/heartbeat/status tools), settings.json registration, hook-glue fallback |
 | supervisor-minimal | single-task worktree-per-lease spawn of headless claude -p, env token injection, lease TTL/reclaim, abort-at-next-tool-call, worktree reap |
 | cli-thin | surge auth (claim URL), status, compile, dispatch, abort |
-| minimal-shell-ui | project list, compile action, dispatch/abort, runs/span tree, polling |
+| minimal-shell-ui | global shell (sidebar · switcher · toast/dialog layers), project list, compile action, dispatch/abort, runs/span tree, polling |
+| default-library-seed | minimum normative library items for the Phase 0 pipeline (one doc skill, one subagent) |
 
 ## Scoping assumptions
 

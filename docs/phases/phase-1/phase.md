@@ -17,6 +17,11 @@ Make pipelines and library items *authorable* instead of data-defined: the React
 5. Trust flow: imports land untrusted, red banner, Mark reviewed, compile hard-block naming untrusted items (INV-AUTH-3).
 6. Compile dialog with the four-line capability report (writes · shell · network · egress) and signature line (design §04).
 7. Upgrade review dialog for bumping pinned library versions (design §23-Two).
+8. **Pipelines page** (design §09): filter rail, card grid, and the detail view — composition tables, version history with diff, materializations list, broken-reference states. The upgrade-review dialog (7) launches from this page's composition table. Includes the assign-pipeline dialog and reassignment semantics ("fetched at the next session start", design §18).
+9. **Project·Overview** (design §12): binding/subagents/hooks cards, assignment card with the stale box, docs chips (data-only until the Phase 3 Docs surface), recent runs.
+10. **Canvas modes, first two**: dry run (topological walk, cost estimate, gate callouts) and the builder diff overlay (design §11). Run overlay → Phase 2; debugger → Phase 3.
+11. **Inspector EVAL tab** in its disclaimed deterministic form, plus the context-budget bars (design §11); real evals and calibration stay post-V3.
+12. **Default library, full set**: the normative seven hooks · six subagents · seven skills backing the doc chain (design §03/§10), authored and published through the library surfaces this phase builds — on the Phase 0 seed.
 
 ## Out of scope
 
@@ -24,7 +29,7 @@ Make pipelines and library items *authorable* instead of data-defined: the React
 - Board·Ops, work orders, gates on issues, dispatch queue → Phase 2
 - Wave integration, budgets, aborts → Phase 2
 - SSE, heartbeat live-lines, toasts beyond basics → Phase 2
-- Observatory waterfall, COE, ratchet, metrics, replay, node evals, debugger → Phase 3
+- Observatory waterfall, COE, ratchet, metrics, replay, debugger → Phase 3 (the EVAL panel's disclaimed form ships here — in-scope 11)
 - Retention/compaction → Phase 3
 - Settings surfaces, backup/restore, token rotation UI, egress allowlist editor → Phase 3 (egress *data* exists for the capability report)
 - Frames/stickies round-trip fidelity — explicitly deferred; known-lossy per design §23 "Designed but not wired"
@@ -81,6 +86,12 @@ graph TB
 | trust-and-import | untrusted state, review flow, compile hard-block |
 | compile-dialog | capability report computation + signature |
 | upgrade-review | pinned-version bump dialog, affected-node list |
+| pipelines-pages | §09 list + detail (composition, history/diff, materializations, broken refs), assign dialog |
+| project-overview | §12 two-column health page, cross-surface jumps |
+| canvas-modes | dry run walk + builder diff overlay; EVAL tab disclaimed panel + context-budget bars |
+| default-library | the normative 7·6·7 item set backing the doc chain, authored on the Phase 0 seed |
+
+Twelve specs — over the rescope threshold (grown by the 2026-08-23 coverage audit: §09/§12 surfaces, two canvas modes, the EVAL panel and the default library previously had no owner). Run `/halfcycle:phase-rescope` before the spec sprint; expected split if needed: editor epic (canvas, blocks, round-trip, modes) vs. surfaces epic (pipelines pages, overview, library, trust, dialogs).
 
 ## Scoping assumptions
 
