@@ -16,7 +16,7 @@ Close the loop from execution back into authoring: the Observatory (waterfall, C
 4. Metrics: the three measured (status, latency, cost) and cost-by-role rollups (design §06). The metrics rail ships with the measured trio and the §16 honesty note; the provisional slots render as "not yet measured — COE labels accumulating".
 5. Replay and the pipeline debugger (topological stepping, breakpoints) with their calibration disclaimers.
 6. Retention/compaction: bodies compacted per policy, structure kept forever, compacted placeholders, replay refusal (INV-OBS-2, design §23-Five).
-7. Settings, both levels: appearance, subagent roster, tokens + rotation, credentials, egress allowlist editor (enforcement shipped Phase 2), model-routing card (behaviour shipped Phase 2), backup/restore to the operator-configured `surge-state.git` remote — tokens never included, restore re-mints runtime tokens and requires a fresh session claim via the one-time URL (design §23-Fifteen/Sixteen, INV-AUTH-4/5).
+7. Settings, both levels: appearance, subagent roster, tokens + rotation, credentials, egress allowlist editor (enforcement shipped Phase 2), model-routing + MODEL PROVIDERS cards (behaviour and registry shipped Phase 2, design §23-Twenty-One), backup/restore to the operator-configured `surge-state.git` remote — tokens never included, restore re-mints runtime tokens and requires a fresh session claim via the one-time URL (design §23-Fifteen/Sixteen, INV-AUTH-4/5).
 8. Empty/degraded/refusal state pass across all surfaces (design §20–§21 copy inventory).
 
 ## Out of scope
@@ -92,7 +92,7 @@ graph TB
 | metrics | measured trio, cost-by-role, "not yet measured" provisional slots, disclaimers |
 | replay-debugger | replay semantics, topological stepper, breakpoints, disclaimers |
 | retention | compaction job, placeholder rendering, replay refusal |
-| settings-operations | both settings levels, token rotation, credentials, egress editor, backup/restore |
+| settings-operations | both settings levels, token rotation, credentials, model-providers card, egress editor, backup/restore |
 | state-copy-pass | empty/degraded/refusal states audit against §20–§21 |
 
 ## Scoping assumptions

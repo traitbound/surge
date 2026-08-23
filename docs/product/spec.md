@@ -42,6 +42,8 @@ See [`architecture.md`](architecture.md) for the diagram (must agree exactly wit
 
 **`surge` CLI** — `bind · compile · dispatch · abort · status · auth`; carries first-run session-token claim (INV-AUTH-5) and interactive token setup (INV-AUTH-4). Lands with Phase 0 (thin) and grows with the API.
 
+**Model provider registry — decided 2026-08-23 (design §23-Twenty-One).** Instance-level registry of custom model APIs: `anthropic` (default), `anthropic-compatible` (e.g. DeepSeek — base-URL/key env injection at worker spawn), `openai-compatible via proxy` (through a local translation proxy; not shipped in v1). All model references become provider-qualified; keys follow INV-AUTH-6; provider hosts surface on the capability report's egress line. Registry + injection + provider-qualified routing land in Phase 2, the settings card in Phase 3; per-provider cost normalization is post-V3.
+
 **Post-V3 integration backlog** (recorded, not committed): spans→eval-fixtures promotion (the label source the metrics wait on) · desktop notification bridge for "Needs you" · OpenTelemetry export of runs/spans · signed pipeline export/import bundles reusing the trust machinery · scheduled dispatch (budget-capped, gate-guarded). Explicitly rejected: remote webhooks (breaks the loopback model), community template registry (hosting/identity burden; export bundles suffice).
 
 ## Non-goals
