@@ -41,6 +41,40 @@ pub async fn exists(pool: &SqlitePool, id: &str) -> anyhow::Result<bool> {
     Ok(row.n > 0)
 }
 
+/// Shared row → entity mapping for the read paths. Assignment modelling lands
+/// with the compiler/assignment tasks, so `assigned_pipeline` is `None`.
+#[allow(clippy::too_many_arguments)]
+fn project_from(
+    id: String,
+    name: String,
+    repo_path: String,
+    pipeline_status: String,
+    surge_yaml_written: i64,
+    tracker: String,
+    branch_format: String,
+    created_at: i64,
+) -> Project {
+    Project {
+        id,
+        name,
+        repo_path,
+        assigned_pipeline: None,
+        pipeline_status: match pipeline_status.as_str() {
+            "stale" => surge_domain::project::PipelineAssignmentStatus::Stale,
+            _ => surge_domain::project::PipelineAssignmentStatus::Published,
+        },
+        surge_yaml_written: surge_yaml_written != 0,
+        tracker: match tracker.as_str() {
+            "linear" => TrackerKind::Linear,
+            "github" => TrackerKind::Github,
+            "builtin" => TrackerKind::Builtin,
+            _ => TrackerKind::None,
+        },
+        branch_format,
+        created_at,
+    }
+}
+
 pub async fn get(pool: &SqlitePool, id: &str) -> anyhow::Result<Option<Project>> {
     let row = sqlx::query!(
         "SELECT id, name, repo_path, pipeline_status, surge_yaml_written, tracker,
@@ -50,24 +84,42 @@ pub async fn get(pool: &SqlitePool, id: &str) -> anyhow::Result<Option<Project>>
     )
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|r| Project {
-        id: r.id,
-        name: r.name,
-        repo_path: r.repo_path,
-        // Assignment modelling lands with the compiler/assignment tasks.
-        assigned_pipeline: None,
-        pipeline_status: match r.pipeline_status.as_str() {
-            "stale" => surge_domain::project::PipelineAssignmentStatus::Stale,
-            _ => surge_domain::project::PipelineAssignmentStatus::Published,
-        },
-        surge_yaml_written: r.surge_yaml_written != 0,
-        tracker: match r.tracker.as_str() {
-            "linear" => TrackerKind::Linear,
-            "github" => TrackerKind::Github,
-            "builtin" => TrackerKind::Builtin,
-            _ => TrackerKind::None,
-        },
-        branch_format: r.branch_format,
-        created_at: r.created_at,
+    Ok(row.map(|r| {
+        project_from(
+            r.id,
+            r.name,
+            r.repo_path,
+            r.pipeline_status,
+            r.surge_yaml_written,
+            r.tracker,
+            r.branch_format,
+            r.created_at,
+        )
     }))
+}
+
+/// Every bound project, newest first — the Registry's card grid.
+pub async fn list(pool: &SqlitePool) -> anyhow::Result<Vec<Project>> {
+    let rows = sqlx::query!(
+        "SELECT id, name, repo_path, pipeline_status, surge_yaml_written, tracker,
+                branch_format, created_at
+         FROM project ORDER BY created_at DESC, id"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            project_from(
+                r.id,
+                r.name,
+                r.repo_path,
+                r.pipeline_status,
+                r.surge_yaml_written,
+                r.tracker,
+                r.branch_format,
+                r.created_at,
+            )
+        })
+        .collect())
 }

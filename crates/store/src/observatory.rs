@@ -109,6 +109,36 @@ pub async fn get_run(pool: &SqlitePool, run_id: &str) -> anyhow::Result<Run> {
     })
 }
 
+/// Runs newest-first, optionally scoped to one project — the Observatory's
+/// run list (phase 0: polling read, no SSE).
+pub async fn list_runs(pool: &SqlitePool, project_id: Option<&str>) -> anyhow::Result<Vec<Run>> {
+    let rows = sqlx::query!(
+        "SELECT id, project_id, issue_id, kind, materialization_hash,
+                work_order_hash, status, started_at, ended_at, cost
+         FROM run
+         WHERE (?1 IS NULL OR project_id = ?1)
+         ORDER BY started_at DESC, id DESC",
+        project_id
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Run {
+            id: r.id,
+            project_id: r.project_id,
+            issue_id: r.issue_id,
+            kind: parse_run_kind(&r.kind),
+            materialization_hash: r.materialization_hash,
+            work_order_hash: r.work_order_hash,
+            status: parse_run_status(&r.status),
+            started_at: r.started_at,
+            ended_at: r.ended_at,
+            cost: r.cost,
+        })
+        .collect())
+}
+
 /// The run's span tree in depth-first order: children under their parent,
 /// siblings by start time. The Observatory's waterfall reads this directly.
 pub async fn span_tree(pool: &SqlitePool, run_id: &str) -> anyhow::Result<Vec<Span>> {
