@@ -5,7 +5,7 @@ Area → path → safe-parallel rules. Paths are planned; update in the same com
 | Area | Path | Contents | Safe to parallelize? |
 |---|---|---|---|
 | server | `crates/server/` | Axum API, token middleware, dispatcher/leases, tracker mirror, SSE bridge | Yes across route modules |
-| store | `crates/store/` | embedded SurrealDB connection, SCHEMAFULL definitions, typed repository functions, per-query `kv-mem` tests | Yes across repository modules; **no** two tasks touching the schema definitions at once |
+| store | `crates/store/` | SQLite pool, embedded `sqlx` migrations, typed repository functions, compile-checked queries + in-memory integration tests | Yes across repository modules; **no** two tasks touching the schema definitions at once |
 | compiler | `crates/compiler/` (or module in server initially) | pipeline → materialization, hashing, repo writes | Yes, but any change to hash inputs is `role:critical` and serialized |
 | domain | `crates/domain/` | the twelve entities, `ts-rs` derives, invariant-bearing types | **No** — one task at a time; every other area depends on it |
 | ui | `ui/` | React + Vite app, React Flow canvas, generated types (read-only output of domain) | Yes across surfaces; never hand-edit generated types |
