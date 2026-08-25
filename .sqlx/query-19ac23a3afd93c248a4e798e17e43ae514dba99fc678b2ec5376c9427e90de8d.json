@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH RECURSIVE reach(node_id) AS (\n               SELECT ?2\n               UNION\n               SELECT e.to_node FROM edge e\n               JOIN reach r ON e.from_node = r.node_id\n               WHERE e.pipeline_id = ?1\n           )\n           SELECT node_id AS \"node_id!: String\" FROM reach ORDER BY node_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "node_id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "edge",
+            "name": "to_node"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "19ac23a3afd93c248a4e798e17e43ae514dba99fc678b2ec5376c9427e90de8d"
+}

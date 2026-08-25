@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO run (id, project_id, issue_id, kind, materialization_hash,\n                          work_order_hash, status, started_at, ended_at, cost)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "bdb51bb90fcd2346afb71a8639bb475afa1b233ff008263fea64f91b47c8552d"
+}

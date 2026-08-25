@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO span (id, run_id, parent_span_id, node_id, role, started_at,\n                           duration_ms, status, cost, depth, policy_decision, body)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "5256361efef663c2586752c269e62f0ed45d02c0335cf73afaf62e4df34c9891"
+}

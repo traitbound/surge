@@ -1522,7 +1522,9 @@ name = "surge-store"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "serde_json",
  "sqlx",
+ "surge-domain",
  "tokio",
 ]
 

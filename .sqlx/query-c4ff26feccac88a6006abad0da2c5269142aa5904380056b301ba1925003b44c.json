@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO project (id, name, repo_path, created_at)\n             VALUES ('prj_fixture', 'fixture', '/tmp/fixture', 1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "c4ff26feccac88a6006abad0da2c5269142aa5904380056b301ba1925003b44c"
+}

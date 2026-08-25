@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO node (id, pipeline_id, label, x, y, human_gate, emits_span,\n                               metric_binding, metric_note, kind, config)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 11
+    },
+    "nullable": []
+  },
+  "hash": "1cfdf7418bede7204035941ad2bb1b24f92ba75a4b7a3ef3d8737d9ab6ddda12"
+}

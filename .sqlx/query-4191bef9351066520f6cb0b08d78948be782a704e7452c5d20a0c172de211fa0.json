@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO pipeline (id, name, version, content_hash, blessed, forked_from, created_at)\n         VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "4191bef9351066520f6cb0b08d78948be782a704e7452c5d20a0c172de211fa0"
+}

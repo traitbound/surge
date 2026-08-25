@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO edge (id, pipeline_id, from_node, to_node, trigger, gate_required)\n             VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "37a028827e605e2ccf4d0ee9f6fb7fa49894abe89a4d1cffd8e567bdf0ad81b1"
+}
