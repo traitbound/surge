@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use surge_server::{app, bootstrap_auth, AppState, BIND};
+use surge_server::{app, bootstrap_auth, bootstrap_seed, AppState, BIND};
 
 #[derive(Parser)]
 #[command(name = "surge-server", version)]
@@ -16,6 +16,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let pool = surge_store::open(&args.db).await?;
     bootstrap_auth(&pool).await?;
+    bootstrap_seed(&pool).await?;
     let router = app(AppState::new(pool));
     let addr: SocketAddr = BIND.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;

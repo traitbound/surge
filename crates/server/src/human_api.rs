@@ -16,6 +16,7 @@ use surge_store::tokens::TokenKind;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", post(create_project))
+        .route("/projects/{id}/bind", post(bind_project))
         .route("/projects/{id}/runtime-token", post(mint_runtime_token))
         .route("/projects/{id}/compile", post(crate::compile_api::compile_project))
         .route("/session/rotate", post(rotate_session))
@@ -72,6 +73,76 @@ async fn create_project(
         return internal(e, "audit write failed");
     }
     (StatusCode::CREATED, Json(project)).into_response()
+}
+
+/// Bind the project to its repo: write the `surge.yaml` base file into
+/// `repo_path` and NOTHING else (INV-DATA-1 — binding's only write; the
+/// compiler later re-emits the same header with its step blocks). Refusals
+/// are visible records with audit entries (INV-ERR-1).
+async fn bind_project(State(state): State<AppState>, Path(project_id): Path<String>) -> Response {
+    let now = now_ms();
+    let project = match surge_store::projects::get(&state.pool, &project_id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            if let Err(e) = surge_store::audit::record(
+                &state.pool,
+                "project.bind_refused",
+                &format!("unknown project: {project_id}"),
+                "human",
+                None,
+                now,
+            )
+            .await
+            {
+                return internal(e, "audit write failed");
+            }
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "unknown project" })))
+                .into_response();
+        }
+        Err(e) => return internal(e, "project lookup failed"),
+    };
+    if !std::path::Path::new(&project.repo_path).is_dir() {
+        let reason = format!("repo path is not a directory: {}", project.repo_path);
+        if let Err(e) = surge_store::audit::record(
+            &state.pool,
+            "project.bind_refused",
+            &reason,
+            "human",
+            Some(&project_id),
+            now,
+        )
+        .await
+        {
+            return internal(e, "audit write failed");
+        }
+        return (StatusCode::CONFLICT, Json(serde_json::json!({ "error": reason }))).into_response();
+    }
+
+    let yaml = surge_compiler::surge_yaml_base(&project);
+    if let Err(e) = std::fs::write(std::path::Path::new(&project.repo_path).join("surge.yaml"), yaml)
+    {
+        return internal(e.into(), "surge.yaml write failed");
+    }
+    if let Err(e) = surge_store::projects::mark_surge_yaml_written(&state.pool, &project_id).await {
+        return internal(e, "bind flag update failed");
+    }
+    if let Err(e) = surge_store::audit::record(
+        &state.pool,
+        "project.bound",
+        &project_id,
+        "human",
+        Some(&project_id),
+        now,
+    )
+    .await
+    {
+        return internal(e, "audit write failed");
+    }
+    match surge_store::projects::get(&state.pool, &project_id).await {
+        Ok(Some(p)) => Json(p).into_response(),
+        Ok(None) => internal(anyhow::anyhow!("project vanished mid-bind"), "project reload failed"),
+        Err(e) => internal(e, "project reload failed"),
+    }
 }
 
 /// Mint a per-project runtime token (INV-AUTH-1). The plaintext exists only
