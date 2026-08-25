@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, content_hash, cache_key, pipeline_id, project_id, signed_by, fresh, created_at\n         FROM materialization WHERE project_id = ? AND fresh = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "materialization",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "content_hash",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "materialization",
+            "name": "content_hash"
+          }
+        }
+      },
+      {
+        "name": "cache_key",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "materialization",
+            "name": "cache_key"
+          }
+        }
+      },
+      {
+        "name": "pipeline_id",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "materialization",
+            "name": "pipeline_id"
+          }
+        }
+      },
+      {
+        "name": "project_id",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "materialization",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "name": "signed_by",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "materialization",
+            "name": "signed_by"
+          }
+        }
+      },
+      {
+        "name": "fresh",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "materialization",
+            "name": "fresh"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "materialization",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d1421914dc586e3f40643a54850febcbd48300e0caeb4338896de36195d8e56f"
+}

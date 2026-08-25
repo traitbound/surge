@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", post(create_project))
         .route("/projects/{id}/runtime-token", post(mint_runtime_token))
+        .route("/projects/{id}/compile", post(crate::compile_api::compile_project))
         .route("/session/rotate", post(rotate_session))
         .route("/audit", get(recent_audit))
 }

@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 surge-domain = { path = "../domain" }
 surge-store = { path = "../store" }
+surge-compiler = { path = "../compiler" }
 axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -27,3 +28,4 @@ clap = { workspace = true }
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+tempfile = "3"

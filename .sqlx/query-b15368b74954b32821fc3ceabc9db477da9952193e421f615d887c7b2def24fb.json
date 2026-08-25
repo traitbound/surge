@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE materialization SET fresh = 0 WHERE project_id = ? AND fresh = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "b15368b74954b32821fc3ceabc9db477da9952193e421f615d887c7b2def24fb"
+}

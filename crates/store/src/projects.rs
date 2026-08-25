@@ -40,3 +40,34 @@ pub async fn exists(pool: &SqlitePool, id: &str) -> anyhow::Result<bool> {
         .await?;
     Ok(row.n > 0)
 }
+
+pub async fn get(pool: &SqlitePool, id: &str) -> anyhow::Result<Option<Project>> {
+    let row = sqlx::query!(
+        "SELECT id, name, repo_path, pipeline_status, surge_yaml_written, tracker,
+                branch_format, created_at
+         FROM project WHERE id = ?",
+        id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| Project {
+        id: r.id,
+        name: r.name,
+        repo_path: r.repo_path,
+        // Assignment modelling lands with the compiler/assignment tasks.
+        assigned_pipeline: None,
+        pipeline_status: match r.pipeline_status.as_str() {
+            "stale" => surge_domain::project::PipelineAssignmentStatus::Stale,
+            _ => surge_domain::project::PipelineAssignmentStatus::Published,
+        },
+        surge_yaml_written: r.surge_yaml_written != 0,
+        tracker: match r.tracker.as_str() {
+            "linear" => TrackerKind::Linear,
+            "github" => TrackerKind::Github,
+            "builtin" => TrackerKind::Builtin,
+            _ => TrackerKind::None,
+        },
+        branch_format: r.branch_format,
+        created_at: r.created_at,
+    }))
+}

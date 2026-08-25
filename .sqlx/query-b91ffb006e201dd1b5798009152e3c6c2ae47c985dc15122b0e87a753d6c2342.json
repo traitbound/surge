@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO library_item (id, kind, name, version, body, trust,\n                                   trust_reviewed_by, trust_reviewed_at, created_at)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "b91ffb006e201dd1b5798009152e3c6c2ae47c985dc15122b0e87a753d6c2342"
+}
