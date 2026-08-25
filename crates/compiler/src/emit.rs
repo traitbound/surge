@@ -49,8 +49,8 @@ pub fn emit_files(
     };
 
     let mut files: BTreeMap<String, String> = BTreeMap::new();
-    // settings.json hook entries, in stable node-id order.
-    let mut hook_entries: Vec<serde_json::Value> = Vec::new();
+    // settings.json hook entries per event, in stable node-id order.
+    let mut hook_entries: Vec<(String, Option<String>, String)> = Vec::new();
     // surge.yaml step blocks, in stable node-id order.
     let mut steps: Vec<(String, String)> = Vec::new();
 
@@ -77,11 +77,9 @@ pub fn emit_files(
                 let script = hook_script_path(&hook.name);
                 insert(&mut files, script.clone(), body(LibraryItemKind::Hook, hook))?;
                 match scope {
-                    HookScope::Session => hook_entries.push(serde_json::json!({
-                        "event": event,
-                        "matcher": matcher,
-                        "command": script,
-                    })),
+                    HookScope::Session => {
+                        hook_entries.push((event.clone(), matcher.clone(), script))
+                    }
                     // Step-scoped hooks become surge.yaml step blocks.
                     HookScope::Step => steps.push((n.id.clone(), script)),
                 }
@@ -94,13 +92,51 @@ pub fn emit_files(
         }
     }
 
-    // .claude/settings.json — the runtime's entry point. Plugin/MCP
-    // registration is added by phase 0 item 6.
-    let settings = serde_json::json!({ "hooks": hook_entries });
+    // .claude/settings.json — Claude Code's real hooks schema. The two Surge
+    // runtime hooks are always wired: the abort guard is how an abort lands at
+    // the next tool call (§06), and span emission is the raw-HTTP fallback for
+    // the MCP span tool (ADR-8). Both reach Surge over the always-allowed
+    // loopback (INV-DEPLOY-1 exemption) via $SURGE_PLUGIN_DIR scripts.
+    let mut events: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+    let hook_json = |command: &str, matcher: Option<&str>| {
+        serde_json::json!({
+            "matcher": matcher.unwrap_or("*"),
+            "hooks": [{ "type": "command", "command": command }],
+        })
+    };
+    events
+        .entry("PreToolUse".into())
+        .or_default()
+        .push(hook_json("\"$SURGE_PLUGIN_DIR\"/hooks/poll-abort.sh", None));
+    events
+        .entry("PostToolUse".into())
+        .or_default()
+        .push(hook_json("\"$SURGE_PLUGIN_DIR\"/hooks/emit-span.sh", None));
+    for (event, matcher, script) in &hook_entries {
+        events
+            .entry(event.clone())
+            .or_default()
+            .push(hook_json(script, matcher.as_deref()));
+    }
+    let settings = serde_json::json!({ "hooks": events });
     insert(
         &mut files,
         ".claude/settings.json".into(),
         serde_json::to_string_pretty(&settings).expect("json") + "\n",
+    )?;
+
+    // .claude/mcp.json — registers the plugin's MCP server; the supervisor
+    // spawns workers with `--mcp-config .claude/mcp.json`. Lives under
+    // .claude/ so the write list stays closed (INV-DATA-1).
+    let mcp = serde_json::json!({
+        "mcpServers": {
+            "surge": { "command": "node", "args": ["${SURGE_PLUGIN_DIR}/mcp/server.mjs"] }
+        }
+    });
+    insert(
+        &mut files,
+        ".claude/mcp.json".into(),
+        serde_json::to_string_pretty(&mcp).expect("json") + "\n",
     )?;
 
     // surge.yaml step blocks (committed, INV-DATA-7). Bind-time creation of

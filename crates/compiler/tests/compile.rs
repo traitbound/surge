@@ -90,10 +90,16 @@ fn fixture_compiles_deterministically() {
     assert_eq!(paths, vec![
         ".claude/agents/doc-writer.md",
         ".claude/agents/implementer.md",
+        ".claude/mcp.json",
         ".claude/settings.json",
         ".claude/skills/write-summary/SKILL.md",
         "surge.yaml",
     ]);
+    // The always-on runtime hooks and the MCP registration are wired in.
+    let settings = &a.files.iter().find(|f| f.rel_path == ".claude/settings.json").unwrap().contents;
+    assert!(settings.contains("poll-abort.sh") && settings.contains("emit-span.sh"), "{settings}");
+    let mcp = &a.files.iter().find(|f| f.rel_path == ".claude/mcp.json").unwrap().contents;
+    assert!(mcp.contains("mcp/server.mjs"), "{mcp}");
     assert!(a.cache_key.starts_with("mk_") && a.cache_key.ends_with("..fixture"));
 
     // Capability report (§04): the doc write, no shell, implementer holds WebSearch.

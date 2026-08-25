@@ -32,7 +32,7 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 - `.claude/context/` — per-area agent context files (append-only)
 - `crates/` — cargo workspace: `domain` (object model, `ts-rs` derives), `store` (SQLite/`sqlx`, embedded migrations), `server` (Axum, bin `surge-server`), `cli` (bin `surge`), `compiler` (materialization compiler + INV-ID-2 hashing; hash-input changes are `role:critical`)
 - `ui/` — Vite + React app; `ui/src/generated/` is ts-rs output (gitignored, regenerate via domain tests, never hand-edit)
-- `integrations/claude-plugin/` — Claude Code plugin (MCP server + hooks, ADR-8); lands with Phase 0 item 6
+- `integrations/claude-plugin/` — Claude Code plugin (ADR-8): zero-dep Node MCP server (span/heartbeat/status tools), abort-guard + span-emission hooks (also the raw-HTTP fallback glue); registered via compiled `.claude/mcp.json` + settings hooks
 
 ## Key commands
 
@@ -52,7 +52,7 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 ## Env var names
 
 - `DATABASE_URL` / `SQLX_OFFLINE` — sqlx dev tooling only (compile-time query checking); never read by Surge at runtime.
-- Worker-facing (injected by the supervisor at spawn, INV-AUTH-4): `SURGE_API`, `SURGE_RUN_ID`, `SURGE_ISSUE_ID`, `SURGE_RUNTIME_TOKEN`.
+- Worker-facing (injected by the supervisor at spawn, INV-AUTH-4): `SURGE_API`, `SURGE_RUN_ID`, `SURGE_ISSUE_ID`, `SURGE_RUNTIME_TOKEN`, `SURGE_PLUGIN_DIR`.
 
 Record names only here — values go to personal memory or local `.env` (gitignored).
 
