@@ -1,0 +1,12 @@
+{
+  "name": "surge",
+  "description": "Surge runtime integration: the runtime-token capabilities as typed MCP tools, plus span-emission and abort-guard hooks (ADR-8).",
+  "version": "0.0.1",
+  "mcpServers": {
+    "surge": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/server.mjs"]
+    }
+  },
+  "hooks": "./hooks/hooks.json"
+}

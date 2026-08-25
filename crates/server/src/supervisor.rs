@@ -24,6 +24,9 @@ pub struct SupervisorConfig {
     pub work_dir: PathBuf,
     /// Injected as SURGE_API so hooks/tools can reach Surge (INV-DEPLOY-1 exemption).
     pub api_base: String,
+    /// Where the Claude Code plugin lives; injected as SURGE_PLUGIN_DIR — the
+    /// compiled .claude/mcp.json and settings.json hooks resolve against it.
+    pub plugin_dir: PathBuf,
     /// How often the watchdog looks at the lease clock and the child.
     pub poll_ms: u64,
 }
@@ -31,10 +34,16 @@ pub struct SupervisorConfig {
 impl Default for SupervisorConfig {
     fn default() -> Self {
         Self {
-            worker_cmd: vec!["claude".into(), "-p".into()],
+            worker_cmd: vec![
+                "claude".into(),
+                "-p".into(),
+                "--mcp-config".into(),
+                ".claude/mcp.json".into(),
+            ],
             lease_ttl_ms: 10 * 60 * 1000,
             work_dir: PathBuf::from("surge-worktrees"),
             api_base: format!("http://{}", crate::BIND),
+            plugin_dir: PathBuf::from("integrations/claude-plugin"),
             poll_ms: 500,
         }
     }
@@ -202,6 +211,7 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
         .env("SURGE_RUN_ID", &run_id)
         .env("SURGE_ISSUE_ID", &issue.id)
         .env("SURGE_RUNTIME_TOKEN", runtime_token)
+        .env("SURGE_PLUGIN_DIR", &cfg.plugin_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -384,6 +394,7 @@ pub async fn dispatch_doc_run(state: &AppState, project_id: &str) -> anyhow::Res
         .env("SURGE_API", &cfg.api_base)
         .env("SURGE_RUN_ID", &run_id)
         .env("SURGE_RUNTIME_TOKEN", runtime_token)
+        .env("SURGE_PLUGIN_DIR", &cfg.plugin_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

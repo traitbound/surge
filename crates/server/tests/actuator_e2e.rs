@@ -54,6 +54,7 @@ async fn setup(worker_script: &str) -> Env {
         lease_ttl_ms: 120_000,
         work_dir: work.path().join("worktrees"),
         api_base: api_base.clone(),
+        plugin_dir: "integrations/claude-plugin".into(),
         poll_ms: 50,
     };
     let state = AppState::with_supervisor(pool.clone(), cfg);
