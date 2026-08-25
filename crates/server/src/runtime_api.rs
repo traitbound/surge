@@ -108,6 +108,7 @@ async fn append_span(
 }
 
 /// Issue-scoped guard shared by the work-order/lease/heartbeat capabilities.
+#[allow(clippy::result_large_err)] // the Err is a ready-to-send Response by design
 async fn issue_for(
     state: &AppState,
     identity: &Identity,
