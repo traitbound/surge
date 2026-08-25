@@ -28,17 +28,22 @@ async fn live() -> Live {
     let router = app(state.clone());
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 
-    surge_store::projects::insert(&pool, &surge_domain::project::Project {
-        id: "prj_p".into(),
-        name: "p".into(),
-        repo_path: "/tmp/p".into(),
-        assigned_pipeline: None,
-        pipeline_status: surge_domain::project::PipelineAssignmentStatus::Published,
-        surge_yaml_written: false,
-        tracker: surge_domain::project::TrackerKind::None,
-        branch_format: "task/{issue}".into(),
-        created_at: 1,
-    }).await.unwrap();
+    surge_store::projects::insert(
+        &pool,
+        &surge_domain::project::Project {
+            id: "prj_p".into(),
+            name: "p".into(),
+            repo_path: "/tmp/p".into(),
+            assigned_pipeline: None,
+            pipeline_status: surge_domain::project::PipelineAssignmentStatus::Published,
+            surge_yaml_written: false,
+            tracker: surge_domain::project::TrackerKind::None,
+            branch_format: "task/{issue}".into(),
+            created_at: 1,
+        },
+    )
+    .await
+    .unwrap();
     let mut issue = surge_domain::board::Issue {
         id: "iss_p".into(),
         project_id: "prj_p".into(),
@@ -47,7 +52,10 @@ async fn live() -> Live {
         phase: "phase-0".into(),
         status: surge_domain::board::OrchestrationStatus::Eligible,
         work_order_hash: String::new(),
-        gate2: surge_domain::board::Gate2State::Reviewed { by: "h".into(), at: 1 },
+        gate2: surge_domain::board::Gate2State::Reviewed {
+            by: "h".into(),
+            at: 1,
+        },
         lease: None,
         retry_count: 0,
         disposition: None,
@@ -56,25 +64,39 @@ async fn live() -> Live {
         created_at: 1,
     };
     issue.work_order_hash = surge_compiler::work_order::work_order_hash(
-        &surge_compiler::work_order::render_work_order(&issue));
+        &surge_compiler::work_order::render_work_order(&issue),
+    );
     surge_store::issues::insert(&pool, &issue).await.unwrap();
-    surge_store::observatory::insert_run(&pool, &surge_domain::observatory::Run {
-        id: "run_p".into(),
-        project_id: "prj_p".into(),
-        issue_id: Some("iss_p".into()),
-        kind: surge_domain::observatory::RunKind::WorkOrder,
-        materialization_hash: "sha256:mat".into(),
-        work_order_hash: Some(issue.work_order_hash.clone()),
-        status: surge_domain::observatory::RunStatus::Running,
-        started_at: 1,
-        ended_at: None,
-        cost: 0.0,
-    }).await.unwrap();
-    assert!(surge_store::issues::claim_lease(&pool, "iss_p", "worker-1", "run_p", 1_000, 600_000)
-        .await.unwrap());
+    surge_store::observatory::insert_run(
+        &pool,
+        &surge_domain::observatory::Run {
+            id: "run_p".into(),
+            project_id: "prj_p".into(),
+            issue_id: Some("iss_p".into()),
+            kind: surge_domain::observatory::RunKind::WorkOrder,
+            materialization_hash: "sha256:mat".into(),
+            work_order_hash: Some(issue.work_order_hash.clone()),
+            status: surge_domain::observatory::RunStatus::Running,
+            started_at: 1,
+            ended_at: None,
+            cost: 0.0,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        surge_store::issues::claim_lease(&pool, "iss_p", "worker-1", "run_p", 1_000, 600_000)
+            .await
+            .unwrap()
+    );
     let rt_token = surge_store::tokens::mint(&pool, TokenKind::Runtime, Some("prj_p"), 1)
-        .await.unwrap();
-    Live { state, api, rt_token }
+        .await
+        .unwrap();
+    Live {
+        state,
+        api,
+        rt_token,
+    }
 }
 
 #[tokio::test]
@@ -99,9 +121,15 @@ async fn mcp_server_speaks_the_protocol_and_reaches_surge() {
         lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
         req: serde_json::Value,
     ) -> serde_json::Value {
-        stdin.write_all((req.to_string() + "\n").as_bytes()).await.unwrap();
+        stdin
+            .write_all((req.to_string() + "\n").as_bytes())
+            .await
+            .unwrap();
         let line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
-            .await.unwrap().unwrap().unwrap();
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         serde_json::from_str(&line).unwrap()
     }
     macro_rules! rpc {
@@ -111,41 +139,83 @@ async fn mcp_server_speaks_the_protocol_and_reaches_surge() {
     }
 
     // initialize
-    let r = rpc!(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize",
-        "params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}));
+    let r = rpc!(
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}})
+    );
     assert_eq!(r["result"]["serverInfo"]["name"], "surge");
 
     // tools/list — the three phase-0 tools
     let r = rpc!(serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
-    let names: Vec<&str> = r["result"]["tools"].as_array().unwrap()
-        .iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, vec!["surge_append_span", "surge_heartbeat", "surge_poll_run"]);
+    let names: Vec<&str> = r["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["surge_append_span", "surge_heartbeat", "surge_poll_run"]
+    );
 
     // span-append lands in the store
-    let r = rpc!(serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
-        "params":{"name":"surge_append_span","arguments":{"body":"hello from mcp","status":"ok"}}}));
+    let r = rpc!(
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+        "params":{"name":"surge_append_span","arguments":{"body":"hello from mcp","status":"ok"}}})
+    );
     assert_eq!(r["result"]["isError"], false, "{r}");
-    let spans = surge_store::observatory::span_tree(&live.state.pool, "run_p").await.unwrap();
-    assert!(spans.iter().any(|s| s.body.as_deref() == Some("hello from mcp")));
+    let spans = surge_store::observatory::span_tree(&live.state.pool, "run_p")
+        .await
+        .unwrap();
+    assert!(spans
+        .iter()
+        .any(|s| s.body.as_deref() == Some("hello from mcp")));
 
     // heartbeat moves the lease clock
-    let before = surge_store::issues::get(&live.state.pool, "iss_p").await.unwrap().unwrap()
-        .lease.unwrap().expires_at;
-    let r = rpc!(serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
-        "params":{"name":"surge_heartbeat","arguments":{}}}));
+    let before = surge_store::issues::get(&live.state.pool, "iss_p")
+        .await
+        .unwrap()
+        .unwrap()
+        .lease
+        .unwrap()
+        .expires_at;
+    let r = rpc!(
+        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
+        "params":{"name":"surge_heartbeat","arguments":{}}})
+    );
     assert_eq!(r["result"]["isError"], false, "{r}");
-    let after = surge_store::issues::get(&live.state.pool, "iss_p").await.unwrap().unwrap()
-        .lease.unwrap().expires_at;
+    let after = surge_store::issues::get(&live.state.pool, "iss_p")
+        .await
+        .unwrap()
+        .unwrap()
+        .lease
+        .unwrap()
+        .expires_at;
     assert!(after > before);
 
     // status poll: running → then aborted reads as a stop order
-    let r = rpc!(serde_json::json!({"jsonrpc":"2.0","id":5,"method":"tools/call",
-        "params":{"name":"surge_poll_run","arguments":{}}}));
-    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("running"));
-    surge_store::observatory::abort_run(&live.state.pool, "run_p", 999).await.unwrap();
-    let r = rpc!(serde_json::json!({"jsonrpc":"2.0","id":6,"method":"tools/call",
-        "params":{"name":"surge_poll_run","arguments":{}}}));
-    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("ABORTED"), "{r}");
+    let r = rpc!(
+        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"tools/call",
+        "params":{"name":"surge_poll_run","arguments":{}}})
+    );
+    assert!(r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("running"));
+    surge_store::observatory::abort_run(&live.state.pool, "run_p", 999)
+        .await
+        .unwrap();
+    let r = rpc!(
+        serde_json::json!({"jsonrpc":"2.0","id":6,"method":"tools/call",
+        "params":{"name":"surge_poll_run","arguments":{}}})
+    );
+    assert!(
+        r["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("ABORTED"),
+        "{r}"
+    );
 }
 
 async fn run_hook(script: &str, live: &Live, stdin_payload: Option<&str>) -> (i32, String) {
@@ -160,12 +230,21 @@ async fn run_hook(script: &str, live: &Live, stdin_payload: Option<&str>) -> (i3
         .stderr(Stdio::piped());
     let mut child = cmd.spawn().unwrap();
     if let Some(p) = stdin_payload {
-        child.stdin.take().unwrap().write_all(p.as_bytes()).await.unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(p.as_bytes())
+            .await
+            .unwrap();
     } else {
         drop(child.stdin.take());
     }
     let out = child.wait_with_output().await.unwrap();
-    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 #[tokio::test]
@@ -175,21 +254,37 @@ async fn fallback_hooks_guard_and_emit() {
     // PostToolUse fallback: emits a span naming the tool.
     let (code, _) = run_hook("hooks/emit-span.sh", &live, Some(r#"{"tool_name":"Bash"}"#)).await;
     assert_eq!(code, 0);
-    let spans = surge_store::observatory::span_tree(&live.state.pool, "run_p").await.unwrap();
-    assert!(spans.iter().any(|s| s.body.as_deref() == Some("tool: Bash")));
+    let spans = surge_store::observatory::span_tree(&live.state.pool, "run_p")
+        .await
+        .unwrap();
+    assert!(spans
+        .iter()
+        .any(|s| s.body.as_deref() == Some("tool: Bash")));
 
     // PreToolUse guard: passes while running, heartbeats on the way through…
-    let before = surge_store::issues::get(&live.state.pool, "iss_p").await.unwrap().unwrap()
-        .lease.unwrap().expires_at;
+    let before = surge_store::issues::get(&live.state.pool, "iss_p")
+        .await
+        .unwrap()
+        .unwrap()
+        .lease
+        .unwrap()
+        .expires_at;
     tokio::time::sleep(Duration::from_millis(10)).await;
     let (code, _) = run_hook("hooks/poll-abort.sh", &live, None).await;
     assert_eq!(code, 0);
-    let after = surge_store::issues::get(&live.state.pool, "iss_p").await.unwrap().unwrap()
-        .lease.unwrap().expires_at;
+    let after = surge_store::issues::get(&live.state.pool, "iss_p")
+        .await
+        .unwrap()
+        .unwrap()
+        .lease
+        .unwrap()
+        .expires_at;
     assert!(after > before, "the guard heartbeats while it's here");
 
     // …and blocks with exit 2 once the abort ledger is written (§06).
-    surge_store::observatory::abort_run(&live.state.pool, "run_p", 999).await.unwrap();
+    surge_store::observatory::abort_run(&live.state.pool, "run_p", 999)
+        .await
+        .unwrap();
     let (code, stderr) = run_hook("hooks/poll-abort.sh", &live, None).await;
     assert_eq!(code, 2, "exit 2 blocks the tool call");
     assert!(stderr.contains("aborted"), "{stderr}");

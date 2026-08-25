@@ -15,7 +15,7 @@ use surge_store::tokens::TokenKind;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/projects", post(create_project))
+        .route("/projects", post(create_project).get(list_projects))
         .route("/projects/{id}/bind", post(bind_project))
         .route("/projects/{id}/runtime-token", post(mint_runtime_token))
         .route("/projects/{id}/compile", post(crate::compile_api::compile_project))
@@ -23,8 +23,39 @@ pub fn router() -> Router<AppState> {
         .route("/audit", get(recent_audit))
         .route("/issues", post(create_issue))
         .route("/issues/{id}/dispatch", post(dispatch_issue))
+        .route("/runs", get(list_runs))
         .route("/runs/{id}/abort", post(abort_run))
+        .route("/runs/{id}/spans", get(run_spans))
         .route("/projects/{id}/doc-run", post(dispatch_doc_run))
+}
+
+/// Registry read: every bound project (the UI's card grid, design §08).
+async fn list_projects(State(state): State<AppState>) -> Response {
+    match surge_store::projects::list(&state.pool).await {
+        Ok(projects) => Json(projects).into_response(),
+        Err(e) => internal(e, "project list failed"),
+    }
+}
+
+#[derive(Deserialize)]
+struct RunsQuery {
+    project_id: Option<String>,
+}
+
+/// Observatory read: runs newest-first, optionally scoped to one project.
+async fn list_runs(State(state): State<AppState>, Query(q): Query<RunsQuery>) -> Response {
+    match surge_store::observatory::list_runs(&state.pool, q.project_id.as_deref()).await {
+        Ok(runs) => Json(runs).into_response(),
+        Err(e) => internal(e, "run list failed"),
+    }
+}
+
+/// Observatory read: one run's span tree in depth-first order (waterfall rows).
+async fn run_spans(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match surge_store::observatory::span_tree(&state.pool, &id).await {
+        Ok(spans) => Json(spans).into_response(),
+        Err(e) => internal(e, "span tree read failed"),
+    }
 }
 
 fn internal(e: anyhow::Error, what: &str) -> Response {

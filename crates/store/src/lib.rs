@@ -223,6 +223,66 @@ mod object_model_tests {
     }
 
     #[tokio::test]
+    async fn projects_list_reads_back_newest_first() {
+        let pool = crate::open_in_memory().await.unwrap();
+        for (id, t) in [("prj_a", 1_000), ("prj_b", 2_000)] {
+            sqlx::query!(
+                "INSERT INTO project (id, name, repo_path, created_at)
+                 VALUES (?1, ?1, '/tmp/p', ?2)",
+                id,
+                t
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let projects = crate::projects::list(&pool).await.unwrap();
+        let ids: Vec<&str> = projects.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["prj_b", "prj_a"]);
+        // The list read agrees with the single-row read.
+        assert_eq!(projects[0], crate::projects::get(&pool, "prj_b").await.unwrap().unwrap());
+    }
+
+    #[tokio::test]
+    async fn runs_list_scopes_by_project_and_orders_newest_first() {
+        let pool = crate::open_in_memory().await.unwrap();
+        seed_project_and_pipeline(&pool).await;
+        sqlx::query!(
+            "INSERT INTO project (id, name, repo_path, created_at)
+             VALUES ('prj_other', 'other', '/tmp/other', 1)"
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (id, project, t) in
+            [("run_a", "prj_fixture", 1_000), ("run_b", "prj_fixture", 2_000), ("run_c", "prj_other", 3_000)]
+        {
+            crate::observatory::insert_run(&pool, &Run {
+                id: id.into(),
+                project_id: project.into(),
+                issue_id: None,
+                kind: RunKind::Doc,
+                materialization_hash: "sha256:mat".into(),
+                work_order_hash: None,
+                status: RunStatus::Running,
+                started_at: t,
+                ended_at: None,
+                cost: 0.0,
+            })
+            .await
+            .unwrap();
+        }
+        let all = crate::observatory::list_runs(&pool, None).await.unwrap();
+        let ids: Vec<&str> = all.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["run_c", "run_b", "run_a"]);
+        let scoped = crate::observatory::list_runs(&pool, Some("prj_fixture")).await.unwrap();
+        let ids: Vec<&str> = scoped.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["run_b", "run_a"]);
+        assert!(crate::observatory::list_runs(&pool, Some("prj_absent")).await.unwrap().is_empty());
+
+    }
+
+    #[tokio::test]
     async fn audit_appends_and_reads_back() {
         let pool = crate::open_in_memory().await.unwrap();
         let id = crate::audit::record(&pool, "compile", "pl_two_node_v1", "st_test", None, 5_000)
