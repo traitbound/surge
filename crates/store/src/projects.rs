@@ -1,6 +1,6 @@
-//! Project repository — the minimal subset the token boundary needs (a row to
-//! scope runtime tokens to). Binding semantics (surge.yaml write) land with
-//! phase 0 item 4.
+//! Project repository — project rows scope runtime tokens; binding
+//! (`surge.yaml` written into the repo, INV-DATA-1) is recorded on the row via
+//! [`mark_surge_yaml_written`].
 
 use sqlx::SqlitePool;
 use surge_domain::project::{Project, TrackerKind};
@@ -32,6 +32,15 @@ pub async fn insert(pool: &SqlitePool, p: &Project) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Record that binding wrote `surge.yaml` into the project's repo (phase 0
+/// item 4, INV-DATA-1). Returns whether a row was updated.
+pub async fn mark_surge_yaml_written(pool: &SqlitePool, id: &str) -> anyhow::Result<bool> {
+    let res = sqlx::query!("UPDATE project SET surge_yaml_written = 1 WHERE id = ?", id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
 }
 
 pub async fn exists(pool: &SqlitePool, id: &str) -> anyhow::Result<bool> {

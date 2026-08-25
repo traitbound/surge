@@ -6,6 +6,21 @@ use crate::{item_key, CompileRefusal, CompiledFile, LibraryIndex};
 use std::collections::BTreeMap;
 use surge_domain::library::LibraryItemKind;
 use surge_domain::pipeline::{HookScope, Node, NodeConfig, Pipeline};
+use surge_domain::project::Project;
+
+/// The committed `surge.yaml` base — what binding a project writes (phase 0
+/// item 4, INV-DATA-1) and what the compiled `surge.yaml` extends with its
+/// step blocks. One renderer for both, so bind and compile can never disagree
+/// about the header.
+pub fn surge_yaml_base(project: &Project) -> String {
+    format!(
+        "# surge.yaml — managed by surge (committed)\n\
+         # Step blocks under `steps:` are compiler-managed; edit the pipeline in Surge, not here.\n\
+         project: {}\n\
+         name: {}\n",
+        project.id, project.name
+    )
+}
 
 fn skill_path(name: &str) -> String {
     format!(".claude/skills/{name}/SKILL.md")
@@ -39,6 +54,7 @@ pub fn emit_files(
     pipeline: &Pipeline,
     nodes: &[Node],
     library: &LibraryIndex,
+    project: &Project,
 ) -> Result<Vec<CompiledFile>, CompileRefusal> {
     let body = |kind: LibraryItemKind, r: &surge_domain::pipeline::LibraryRef| -> String {
         library
@@ -139,13 +155,10 @@ pub fn emit_files(
         serde_json::to_string_pretty(&mcp).expect("json") + "\n",
     )?;
 
-    // surge.yaml step blocks (committed, INV-DATA-7). Bind-time creation of
-    // the base file is item 4; the compiler owns only the step blocks.
-    let mut yaml = String::new();
-    yaml.push_str(&format!(
-        "# surge.yaml — managed by surge (committed)\npipeline: {} v{}\nsteps:\n",
-        pipeline.name, pipeline.version
-    ));
+    // surge.yaml (committed, INV-DATA-7): the bind-time base header (item 4)
+    // extended with the compiler-managed step blocks.
+    let mut yaml = surge_yaml_base(project);
+    yaml.push_str(&format!("pipeline: {} v{}\nsteps:\n", pipeline.name, pipeline.version));
     if steps.is_empty() {
         yaml.push_str("  []\n");
     } else {

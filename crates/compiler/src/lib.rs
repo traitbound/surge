@@ -13,6 +13,7 @@ pub mod work_order;
 mod write;
 
 pub use capability::capability_report;
+pub use emit::surge_yaml_base;
 pub use hash::{materialization_hash, pipeline_content_hash};
 pub use write::write_to_repo;
 
@@ -112,7 +113,7 @@ pub fn compile(
     }
 
     // 2. Emit files (sorted, conflict-checked).
-    let files = emit::emit_files(pipeline, nodes, library)?;
+    let files = emit::emit_files(pipeline, nodes, library, project)?;
 
     // 3. Identity: pipeline content hash × project × emitted bytes.
     let pipeline_hash = pipeline_content_hash(nodes, edges);

@@ -73,6 +73,13 @@ pub async fn insert_graph(
     Ok(())
 }
 
+pub async fn exists(pool: &SqlitePool, id: &str) -> anyhow::Result<bool> {
+    let row = sqlx::query!("SELECT COUNT(*) AS n FROM pipeline WHERE id = ?", id)
+        .fetch_one(pool)
+        .await?;
+    Ok(row.n > 0)
+}
+
 /// Load one published pipeline version and its whole graph.
 pub async fn load_graph(
     pool: &SqlitePool,

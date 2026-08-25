@@ -209,6 +209,20 @@ mod object_model_tests {
     }
 
     #[tokio::test]
+    async fn bind_flag_and_pipeline_existence_roundtrip() {
+        let pool = crate::open_in_memory().await.unwrap();
+        seed_project_and_pipeline(&pool).await;
+
+        assert!(crate::pipelines::exists(&pool, "pl_two_node_v1").await.unwrap());
+        assert!(!crate::pipelines::exists(&pool, "pl_absent").await.unwrap());
+
+        assert!(crate::projects::mark_surge_yaml_written(&pool, "prj_fixture").await.unwrap());
+        let p = crate::projects::get(&pool, "prj_fixture").await.unwrap().unwrap();
+        assert!(p.surge_yaml_written);
+        assert!(!crate::projects::mark_surge_yaml_written(&pool, "prj_absent").await.unwrap());
+    }
+
+    #[tokio::test]
     async fn audit_appends_and_reads_back() {
         let pool = crate::open_in_memory().await.unwrap();
         let id = crate::audit::record(&pool, "compile", "pl_two_node_v1", "st_test", None, 5_000)

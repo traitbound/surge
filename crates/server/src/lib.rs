@@ -70,6 +70,58 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// The shipped default library (design §03: normative product content, not
+/// fixture data) plus the two-node fixture pipeline — everything a fresh
+/// instance needs to compile and dispatch. Runs at every boot, idempotently:
+/// existing rows are never touched (library items are immutable per version,
+/// INV-DATA-2); the `library.seeded` audit entry is written only on the boot
+/// that first inserts anything (INV-OBS-1).
+pub async fn bootstrap_seed(pool: &SqlitePool) -> anyhow::Result<()> {
+    use surge_domain::library::{LibraryItem, LibraryItemKind, TrustState};
+
+    let now = now_ms();
+    let mut seeded = Vec::new();
+
+    let items: [(LibraryItemKind, &str, &str); 3] = [
+        (LibraryItemKind::Subagent, "doc-writer", include_str!("../seed/doc-writer.md")),
+        (LibraryItemKind::Skill, "write-summary", include_str!("../seed/write-summary.SKILL.md")),
+        (LibraryItemKind::Subagent, "implementer", include_str!("../seed/implementer.md")),
+    ];
+    for (kind, name, body) in items {
+        if surge_store::library::get(pool, kind, name, 1).await?.is_some() {
+            continue;
+        }
+        surge_store::library::insert(
+            pool,
+            &LibraryItem {
+                id: format!("li_{}_v1", name.replace('-', "_")),
+                kind,
+                name: name.into(),
+                version: 1,
+                body: body.into(),
+                trust: TrustState::Local,
+                created_at: now,
+            },
+        )
+        .await?;
+        seeded.push(format!("{} v1 ({})", name, kind.as_str()));
+    }
+
+    // Phase 0 has no editor; pipelines are data. Seed the two-node pipeline
+    // so a fresh instance has something to compile and dispatch.
+    let (pipeline, nodes, edges) = surge_domain::fixtures::two_node_pipeline();
+    if !surge_store::pipelines::exists(pool, &pipeline.id).await? {
+        surge_store::pipelines::insert_graph(pool, &pipeline, &nodes, &edges).await?;
+        seeded.push(format!("{} ({})", pipeline.name, pipeline.id));
+    }
+
+    if !seeded.is_empty() {
+        surge_store::audit::record(pool, "library.seeded", &seeded.join(", "), "system", None, now)
+            .await?;
+    }
+    Ok(())
+}
+
 /// First launch / restore / rotation-to-zero: no active session → mint a
 /// one-time claim token and print the claim URL to the terminal. Reachability
 /// is never authorization (INV-AUTH-5).
