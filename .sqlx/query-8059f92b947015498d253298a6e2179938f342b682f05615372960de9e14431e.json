@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO project (id, name, repo_path, surge_yaml_written, tracker,\n                              branch_format, created_at)\n         VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "8059f92b947015498d253298a6e2179938f342b682f05615372960de9e14431e"
+}
