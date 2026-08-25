@@ -30,11 +30,17 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 - `ENGAGEMENT.md` — operational decisions (project type, repo shape, push/branch policy, ceremony tier)
 - `.halfcycle.json` — machine-readable projection of ENGAGEMENT decisions
 - `.claude/context/` — per-area agent context files (append-only)
-- Code will land as a cargo workspace under `crates/` (server, cli) plus `ui/` (Vite app) and `integrations/claude-plugin/` (Claude Code plugin: MCP server + hooks, ADR-8) when scaffolded
+- `crates/` — cargo workspace: `domain` (object model, `ts-rs` derives), `store` (SQLite/`sqlx`, embedded migrations), `server` (Axum, bin `surge-server`), `cli` (bin `surge`)
+- `ui/` — Vite + React app; `ui/src/generated/` is ts-rs output (gitignored, regenerate via domain tests, never hand-edit)
+- `integrations/claude-plugin/` — Claude Code plugin (MCP server + hooks, ADR-8); lands with Phase 0 item 6
 
 ## Key commands
 
-None yet — no build system exists. Add them here in the same commit that introduces the workspace tooling.
+- `cargo build --workspace` — build everything (set `SQLX_OFFLINE=true` if no dev DB; CI/fresh clones work from committed `.sqlx/`)
+- `cargo test --workspace` — tests; the `surge-domain` test target also regenerates `ui/src/generated/` (ts-rs)
+- Schema-change loop: edit `crates/store/migrations/` → `sqlx migrate run --source crates/store/migrations` (with `DATABASE_URL=sqlite://$PWD/.dev.db`; `sqlx database create` once) → `cargo sqlx prepare --workspace` → commit `.sqlx/` in the same change
+- `cargo run -p surge-server` — serve `127.0.0.1:7420` (`--db <path>`, default `surge.db`)
+- `ui/`: `npm run dev` (proxies to :7420) · `npm run build` · `npm run typecheck`
 
 ## Conventions
 
@@ -45,7 +51,9 @@ None yet — no build system exists. Add them here in the same commit that intro
 
 ## Env var names
 
-None defined yet. Record names only here — values go to personal memory or local `.env` (gitignored).
+- `DATABASE_URL` / `SQLX_OFFLINE` — sqlx dev tooling only (compile-time query checking); never read by Surge at runtime.
+
+Record names only here — values go to personal memory or local `.env` (gitignored).
 
 ## Tasks pointer
 

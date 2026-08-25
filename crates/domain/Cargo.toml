@@ -1,0 +1,10 @@
+[package]
+name = "surge-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+ts-rs = { workspace = true }

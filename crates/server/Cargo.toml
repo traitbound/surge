@@ -1,0 +1,20 @@
+[package]
+name = "surge-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "surge-server"
+path = "src/main.rs"
+
+[dependencies]
+surge-domain = { path = "../domain" }
+surge-store = { path = "../store" }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+sqlx = { workspace = true }
+clap = { workspace = true }
