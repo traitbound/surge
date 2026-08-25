@@ -24,6 +24,8 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 sqlx = { workspace = true }
 clap = { workspace = true }
+rust-embed = { workspace = true }
+mime_guess = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
