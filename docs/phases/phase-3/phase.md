@@ -49,7 +49,7 @@ graph TB
 
     subgraph binary["Surge binary — Rust · 127.0.0.1:7420"]
         api["Axum HTTP API<br/>human-token & runtime-token routes<br/>(middleware-enforced boundary)"]
-        db[("SurrealDB — embedded, in-process<br/>graph · document · vector, one ACID boundary<br/>entities · runs/spans · audit")]
+        db[("SQLite — embedded, single file<br/>WAL · sqlx compile-checked · one ACID boundary<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         dispatcher["Dispatcher / lease manager<br/>eligibility · leases · budgets · aborts"]
         supervisor["Runtime supervisor<br/>worktree per lease · spawns headless workers<br/>(INV-EXEC-1/2/3)"]
@@ -98,5 +98,5 @@ graph TB
 ## Scoping assumptions
 
 - scoping assumption — verify at spec time: replay can be implemented as re-dispatch of a recorded span's input against the same materialization hash, without a live process attachment.
-- scoping assumption — verify at spec time: compacting a span body is an `UPDATE` clearing the body fields, with RocksDB reclaiming the space on its own compaction, and no separate blob store is needed.
-- scoping assumption — verify at spec time: **nothing at the engine level retains a compacted body** — no changefeed window, no version history, no index copy. INV-OBS-2 requires the bodies actually gone, so a store that quietly keeps them makes the retention promise a lie. This is the reason ADR-2 chose RocksDB over versioned SurrealKV.
+- scoping assumption — verify at spec time: compacting a span body is an `UPDATE` setting the body columns NULL, with freed pages reclaimed via `incremental_vacuum` (or a periodic `VACUUM`), and no separate blob store is needed.
+- scoping assumption — verify at spec time: **nothing at the engine level retains a compacted body** — WAL frames checkpoint away and freed pages are reused, with no version history or index copy holding the text. INV-OBS-2 requires the bodies actually gone; if a full-text or vector index over span bodies exists by then, compaction must delete its rows in the same transaction.

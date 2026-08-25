@@ -12,8 +12,8 @@ No visual editor in this phase: pipelines are defined as data (checked-in JSON/R
 
 ## In scope
 
-1. Cargo workspace scaffold (`crates/domain`, `crates/store`, `crates/server`, `ui/`) with `ts-rs` generation wired, and the embedded SurrealDB build budget measured and recorded (ADR-2).
-2. The twelve-entity object model in `crates/domain`, persisted in embedded SurrealDB (`kv-rocksdb`) via `SCHEMAFULL` definitions applied at startup (ADR-9), with pipeline nodes/edges, doc chains and span trees stored as edge records rather than join tables — fixtures for entities not yet exercised.
+1. Cargo workspace scaffold (`crates/domain`, `crates/store`, `crates/server`, `ui/`) with `ts-rs` generation wired and the `sqlx` offline-metadata workflow (`cargo sqlx prepare`) established (ADR-2).
+2. The twelve-entity object model in `crates/domain`, persisted in embedded SQLite via `sqlx` migrations applied at startup (ADR-9), with pipeline nodes/edges, doc chains and span trees as edge tables traversed by recursive CTEs — fixtures for entities not yet exercised.
 3. Token middleware: human session token + per-project runtime token; runtime token limited to the five capabilities — fetch work order/lease · claim lease · heartbeat · append spans · poll own-run status (INV-AUTH-1); loud refusal + audit entry on violation (INV-AUTH-2, INV-ERR-1).
 4. Project binding: register a repo path, write `surge.yaml` (INV-DATA-1).
 5. Materialization compiler: pipeline (data-defined) × project → `.claude/` files + `surge.yaml` step blocks, content-hashed per INV-ID-2 (semantic content only); stale detection refuses dispatch (INV-ID-1).
@@ -46,7 +46,7 @@ No visual editor in this phase: pipelines are defined as data (checked-in JSON/R
 - Killing the worker mid-run reclaims the lease at TTL; pressing Abort lands at the worker's next tool call via the status poll, and both leave visible records (INV-ERR-1).
 - A runtime-token call to a human endpoint (e.g. compile) is rejected and the audit table records it.
 - Generated TypeScript types in `ui/` come from `crates/domain` with no hand-written duplicates.
-- Every query in `crates/store` has a `kv-mem` integration test, and cold-build time plus stripped binary size are recorded against the ADR-2 budget.
+- Every query in `crates/store` is `sqlx` compile-checked and covered by an in-memory (`sqlite::memory:`) integration test; writing repository functions assert their commit broadcast (ADR-3).
 
 ## Architecture (this phase)
 
@@ -58,7 +58,7 @@ graph TB
 
     subgraph binary["Surge binary — Rust · 127.0.0.1:7420"]
         api["Axum HTTP API<br/>human-token & runtime-token routes<br/>(middleware-enforced boundary)"]
-        db[("SurrealDB — embedded, in-process<br/>graph · document · vector, one ACID boundary<br/>entities · runs/spans · audit")]
+        db[("SQLite — embedded, single file<br/>WAL · sqlx compile-checked · one ACID boundary<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         supervisor["Runtime supervisor (single-task)<br/>worktree per lease · spawn · TTL · abort<br/>(INV-EXEC-1/2)"]
         ui_assets["Embedded React UI<br/>rust-embed static assets"]
@@ -85,7 +85,7 @@ graph TB
 |---|---|
 | workspace-scaffold | cargo workspace, ui/ Vite app, ts-rs build wiring, rust-embed |
 | domain-model | twelve entities as Rust structs, edge-record relationships, `ts-rs` derives |
-| store-layer | embedded SurrealDB init, `SCHEMAFULL` definitions + startup apply, typed repository functions, `kv-mem` test harness |
+| store-layer | SQLite pool init (WAL, foreign keys, busy_timeout), embedded `sqlx` migrations + startup apply, typed repository functions, commit-broadcast wiring, in-memory test harness |
 | token-boundary | middleware, two token kinds, refusal + audit write path |
 | project-binding | register repo, surge.yaml write, closed-list write guard |
 | compiler-core | data-defined pipeline → hashed materialization → file writes, stale detection |
@@ -100,8 +100,6 @@ graph TB
 
 - scoping assumption — verify at spec time: a Claude Code plugin can bundle an MCP server whose tools cover fetch-at-start, span reporting, heartbeat and the abort-status poll, registered via compiled `.claude/settings.json`, without forking the runtime (ADR-8). Fallback if any tool is uncoverable: the hook-script HTTP glue for that piece.
 - scoping assumption — verify at spec time: a headless `claude -p` process spawned by Surge in a fresh worktree inherits the worktree's compiled `.claude/` config (including plugin/MCP registration) and can run a multi-node pipeline non-interactively (permissions, tool allowlist, exit semantics).
-- scoping assumption — verify at spec time: `ts-rs` covers all twelve entity shapes (incl. tagged enums for node kinds) without hand-written TS patches, and that its derives coexist with the SDK's `SurrealValue` derive — `RecordId` in particular needs a deliberate TypeScript representation rather than a default one.
-- scoping assumption — verify **in the first task, not at spec time**: embedded SurrealDB's cold-build time and contribution to stripped binary size stay inside budget with default features off and only `kv-rocksdb`/`kv-mem` enabled. A blown budget reopens ADR-2 rather than being absorbed.
-- scoping assumption — verify at spec time: `LIVE SELECT` on the local engine delivers reliable, ordered notifications suitable for the Phase 2 SSE bridge. Phase 0 polls, but ADR-3 now depends on this, so it is proven here rather than discovered in Phase 2.
-- scoping assumption — verify at spec time: a typed repository layer plus `kv-mem` tests genuinely substitutes for the compile-time checking ADR-2 gave up — assessed against the lease, gate, trust and hash paths specifically.
+- scoping assumption — verify at spec time: `ts-rs` covers all twelve entity shapes (incl. tagged enums for node kinds) without hand-written TS patches, and that its derives coexist with `sqlx::FromRow` on the same structs — id newtypes in particular need a deliberate TypeScript representation rather than a default one.
+- scoping assumption — verify at spec time: the recursive CTEs for the deepest traversals Phase 0 touches (span tree, pipeline DAG) stay readable behind their repository functions and compile-check cleanly under `sqlx` — assessed against the lease, gate, trust and hash paths specifically. *(2026-08-25: replaces three SurrealDB-era assumptions — build budget, `LIVE SELECT` reliability, and the tests-for-compiler substitution — all mooted by the ADR-2 reversal; commit-then-broadcast ordering is asserted directly by the store-layer tests.)*
 - Greenfield: no claims about existing code exist; all `file:line` anchors will be minted at Layer 4.

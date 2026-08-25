@@ -56,7 +56,7 @@ graph TB
 
     subgraph binary["Surge binary — Rust · 127.0.0.1:7420"]
         api["Axum HTTP API<br/>human-token & runtime-token routes<br/>(middleware-enforced boundary)"]
-        db[("SurrealDB — embedded, in-process<br/>graph · document · vector, one ACID boundary<br/>entities · runs/spans · audit")]
+        db[("SQLite — embedded, single file<br/>WAL · sqlx compile-checked · one ACID boundary<br/>entities · runs/spans · audit")]
         compiler["Materialization compiler<br/>pipeline × project → files"]
         dispatcher["Dispatcher / lease manager<br/>eligibility · leases · budgets · aborts"]
         supervisor["Runtime supervisor<br/>worktree per lease · spawns headless workers<br/>(INV-EXEC-1/2/3)"]
@@ -102,7 +102,7 @@ graph TB
 | lease-manager | claim/TTL/heartbeat/reclaim, retry queueing |
 | wave-integration | rebase order, contract checks, wave PR, conflict report |
 | budgets-aborts | wave budget, role caps, breach gate, abort ledger |
-| sse-streaming | `LIVE SELECT` subscriptions → SSE bridge, event kinds, reconnect, UI subscriptions |
+| sse-streaming | repository commit-broadcast channels → SSE bridge, event kinds, reconnect, UI subscriptions |
 | claude-plugin-full | MCP work-order fetch + lease-claim tools on the Phase 0 skeleton |
 | registry-needs-you | §08 card grid, health badges, the four-condition queue with jumps |
 | run-overlay | latest-run paint on the project canvas: per-node duration/cost/status |
