@@ -40,13 +40,13 @@ No visual editor in this phase: pipelines are defined as data (checked-in JSON/R
 
 - `cargo build` yields one binary; first launch prints the one-time claim URL, and only the browser that visits it holds a session (INV-AUTH-5) — opening `127.0.0.1:7420` cold shows the claim prompt, not the project list.
 - Binding a real repo writes `surge.yaml` and nothing else; compiling writes only the closed-list files (INV-DATA-1), and the materialization row shows its hash.
-- Editing the pipeline fixture and re-compiling produces a new hash; dispatching against the old one is refused with a visible refusal run (INV-ERR-1).
+- A stale or absent materialization refuses dispatch with a visible refusal run whose span carries the reason (INV-ERR-1, INV-ID-1). *(2026-08-25 smoke F5: reworded — "edit the fixture → new hash" had no walkable surface; hash-changes-on-semantic-edit is proven by the compiler test suite, and an edit surface arrives with Phase 1's editor.)*
 - Dispatching one fixture issue creates a worktree on the task branch and spawns a headless `claude -p` worker inside it; the worker's MCP tools (from the plugin skeleton) fetch its work order, append spans, and heartbeat; a two-node pipeline (one doc node, one agent node) runs and its spans appear with role, timing and status; the worktree is reaped at lease end (INV-EXEC-2).
 - The compiled `.claude/` and `work_orders/` files are gitignored via the surge-managed block; `surge.yaml` and the doc node's output are committable (INV-DATA-7).
 - Killing the worker mid-run reclaims the lease at TTL; pressing Abort lands at the worker's next tool call via the status poll, and both leave visible records (INV-ERR-1).
 - A runtime-token call to a human endpoint (e.g. compile) is rejected and the audit table records it.
 - Generated TypeScript types in `ui/` come from `crates/domain` with no hand-written duplicates.
-- Every query in `crates/store` is `sqlx` compile-checked and covered by an in-memory (`sqlite::memory:`) integration test; writing repository functions assert their commit broadcast (ADR-3).
+- Every query in `crates/store` is `sqlx` compile-checked and covered by an in-memory (`sqlite::memory:`) test, directly or via the server integration suites. *(2026-08-25 smoke F6: the commit-broadcast clause moved out — the ADR-3 broadcast ships with Phase 2's SSE bridge, and its per-repo-function assertions land there.)*
 
 ## Architecture (this phase)
 
