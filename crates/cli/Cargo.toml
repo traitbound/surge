@@ -12,4 +12,14 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 anyhow = { workspace = true }
-ureq = "2"
+ureq = { version = "2", features = ["json"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+surge-server = { path = "../server" }
+surge-store = { path = "../store" }
+surge-domain = { path = "../domain" }
+tokio = { workspace = true }
+axum = { workspace = true }
+sqlx = { workspace = true }
+tempfile = "3"

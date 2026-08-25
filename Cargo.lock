@@ -1572,7 +1572,15 @@ name = "surge-cli"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
+ "serde_json",
+ "sqlx",
+ "surge-domain",
+ "surge-server",
+ "surge-store",
+ "tempfile",
+ "tokio",
  "ureq",
 ]
 
@@ -1909,6 +1917,8 @@ dependencies = [
  "once_cell",
  "rustls",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "url",
  "webpki-roots 0.26.11",
 ]
