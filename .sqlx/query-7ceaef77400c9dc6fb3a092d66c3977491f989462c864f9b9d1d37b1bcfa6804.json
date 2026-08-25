@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO issue (id, project_id, title, wave, phase, status, work_order_hash,\n                            gate2, gate2_reviewed_by, gate2_reviewed_at, retry_count,\n                            disposition, priority, is_wave_integration, created_at)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 15
+    },
+    "nullable": []
+  },
+  "hash": "7ceaef77400c9dc6fb3a092d66c3977491f989462c864f9b9d1d37b1bcfa6804"
+}

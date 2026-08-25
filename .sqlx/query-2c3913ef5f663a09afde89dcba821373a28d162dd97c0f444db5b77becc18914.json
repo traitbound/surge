@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO work_order (id, issue_id, path, revision, content_hash, created_at)\n         VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "2c3913ef5f663a09afde89dcba821373a28d162dd97c0f444db5b77becc18914"
+}

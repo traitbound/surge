@@ -7,6 +7,7 @@ mod claim;
 mod compile_api;
 mod human_api;
 mod runtime_api;
+pub mod supervisor;
 
 use axum::{middleware, routing::get, Json, Router};
 use sqlx::SqlitePool;
@@ -16,6 +17,17 @@ pub const BIND: &str = "127.0.0.1:7420";
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
+    pub supervisor: std::sync::Arc<supervisor::SupervisorConfig>,
+}
+
+impl AppState {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool, supervisor: std::sync::Arc::new(supervisor::SupervisorConfig::default()) }
+    }
+
+    pub fn with_supervisor(pool: SqlitePool, cfg: supervisor::SupervisorConfig) -> Self {
+        Self { pool, supervisor: std::sync::Arc::new(cfg) }
+    }
 }
 
 pub fn now_ms() -> i64 {
