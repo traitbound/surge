@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let pool = surge_store::open(&args.db).await?;
     bootstrap_auth(&pool).await?;
-    let router = app(AppState { pool });
+    let router = app(AppState::new(pool));
     let addr: SocketAddr = BIND.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     eprintln!("surge-server listening on http://{BIND}");

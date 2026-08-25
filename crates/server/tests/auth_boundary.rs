@@ -9,7 +9,7 @@ use surge_store::tokens::TokenKind;
 use tower::ServiceExt;
 
 async fn test_state() -> AppState {
-    AppState { pool: surge_store::open_in_memory().await.unwrap() }
+    AppState::new(surge_store::open_in_memory().await.unwrap())
 }
 
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {

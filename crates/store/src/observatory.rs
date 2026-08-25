@@ -150,3 +150,36 @@ pub async fn span_tree(pool: &SqlitePool, run_id: &str) -> anyhow::Result<Vec<Sp
         })
         .collect())
 }
+
+/// Terminal transition observed by the supervisor (INV-EXEC-3). Guarded:
+/// only a still-running run moves — an abort that already landed stands.
+pub async fn finish_run_if_running(
+    pool: &SqlitePool,
+    run_id: &str,
+    status: RunStatus,
+    ended_at: i64,
+) -> anyhow::Result<bool> {
+    let status_s = status.as_str();
+    let res = sqlx::query!(
+        "UPDATE run SET status = ?, ended_at = ? WHERE id = ? AND status = 'running'",
+        status_s,
+        ended_at,
+        run_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() == 1)
+}
+
+/// The abort ledger write (§06): takes effect at the executor's next status
+/// poll. Returns false if the run was already terminal.
+pub async fn abort_run(pool: &SqlitePool, run_id: &str, now: i64) -> anyhow::Result<bool> {
+    let res = sqlx::query!(
+        "UPDATE run SET status = 'aborted', ended_at = ? WHERE id = ? AND status = 'running'",
+        now,
+        run_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() == 1)
+}

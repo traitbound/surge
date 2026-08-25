@@ -11,7 +11,7 @@ use tower::ServiceExt;
 
 async fn setup() -> (AppState, String, tempfile::TempDir) {
     let pool = surge_store::open_in_memory().await.unwrap();
-    let state = AppState { pool: pool.clone() };
+    let state = AppState::new(pool.clone());
     let session = surge_store::tokens::mint(&pool, TokenKind::Session, None, 1).await.unwrap();
     let repo = tempfile::tempdir().unwrap();
 

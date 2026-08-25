@@ -1,0 +1,242 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, project_id, title, wave, phase, status, work_order_hash,\n                gate2, gate2_reviewed_by, gate2_reviewed_at,\n                lease_owner, lease_run_id, lease_expires_at, lease_heartbeat_at,\n                retry_count, disposition, priority, is_wave_integration, created_at\n         FROM issue WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "project_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "wave",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "wave"
+          }
+        }
+      },
+      {
+        "name": "phase",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "phase"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "work_order_hash",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "work_order_hash"
+          }
+        }
+      },
+      {
+        "name": "gate2",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "gate2"
+          }
+        }
+      },
+      {
+        "name": "gate2_reviewed_by",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "gate2_reviewed_by"
+          }
+        }
+      },
+      {
+        "name": "gate2_reviewed_at",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "gate2_reviewed_at"
+          }
+        }
+      },
+      {
+        "name": "lease_owner",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "lease_owner"
+          }
+        }
+      },
+      {
+        "name": "lease_run_id",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "lease_run_id"
+          }
+        }
+      },
+      {
+        "name": "lease_expires_at",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "lease_expires_at"
+          }
+        }
+      },
+      {
+        "name": "lease_heartbeat_at",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "lease_heartbeat_at"
+          }
+        }
+      },
+      {
+        "name": "retry_count",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "retry_count"
+          }
+        }
+      },
+      {
+        "name": "disposition",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "disposition"
+          }
+        }
+      },
+      {
+        "name": "priority",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "priority"
+          }
+        }
+      },
+      {
+        "name": "is_wave_integration",
+        "ordinal": 17,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "is_wave_integration"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 18,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1e99dbb2802c86f4e7763ce3abdf5532b14db7bc7a5e0271dbabb1ba8398a5fa"
+}

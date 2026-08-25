@@ -5,12 +5,14 @@
 //! also fire the commit broadcast once the event bus lands (ADR-3).
 
 pub mod audit;
+pub mod issues;
 pub mod library;
 pub mod materializations;
 pub mod observatory;
 pub mod pipelines;
 pub mod projects;
 pub mod tokens;
+pub mod work_orders;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::path::Path;

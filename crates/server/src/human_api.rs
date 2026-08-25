@@ -20,6 +20,10 @@ pub fn router() -> Router<AppState> {
         .route("/projects/{id}/compile", post(crate::compile_api::compile_project))
         .route("/session/rotate", post(rotate_session))
         .route("/audit", get(recent_audit))
+        .route("/issues", post(create_issue))
+        .route("/issues/{id}/dispatch", post(dispatch_issue))
+        .route("/runs/{id}/abort", post(abort_run))
+        .route("/projects/{id}/doc-run", post(dispatch_doc_run))
 }
 
 fn internal(e: anyhow::Error, what: &str) -> Response {
@@ -147,5 +151,91 @@ async fn recent_audit(State(state): State<AppState>, Query(q): Query<AuditQuery>
     match surge_store::audit::recent(&state.pool, q.limit.unwrap_or(50)).await {
         Ok(entries) => Json(entries).into_response(),
         Err(e) => internal(e, "audit read failed"),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateIssue {
+    id: String,
+    project_id: String,
+    title: String,
+    wave: i64,
+    phase: String,
+}
+
+/// Phase 0 issue creation (fixture issues; taskgraph generation is phase 2).
+/// The work-order hash is pinned at creation from the rendered content, and
+/// Gate-2 is recorded so the issue is dispatchable (§06-01).
+async fn create_issue(State(state): State<AppState>, Json(body): Json<CreateIssue>) -> Response {
+    let now = now_ms();
+    let mut issue = surge_domain::board::Issue {
+        id: body.id,
+        project_id: body.project_id,
+        title: body.title,
+        wave: body.wave,
+        phase: body.phase,
+        status: surge_domain::board::OrchestrationStatus::Eligible,
+        work_order_hash: String::new(),
+        gate2: surge_domain::board::Gate2State::Reviewed { by: "human".into(), at: now },
+        lease: None,
+        retry_count: 0,
+        disposition: None,
+        priority: 0,
+        is_wave_integration: false,
+        created_at: now,
+    };
+    issue.work_order_hash = surge_compiler::work_order::work_order_hash(
+        &surge_compiler::work_order::render_work_order(&issue),
+    );
+    if let Err(e) = surge_store::issues::insert(&state.pool, &issue).await {
+        return internal(e, "issue insert failed");
+    }
+    if let Err(e) = surge_store::audit::record(
+        &state.pool, "issue.created", &issue.id, "human", Some(&issue.project_id), now,
+    )
+    .await
+    {
+        return internal(e, "audit write failed");
+    }
+    (StatusCode::CREATED, Json(issue)).into_response()
+}
+
+async fn dispatch_issue(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match crate::supervisor::dispatch_issue(&state, &id).await {
+        Ok(crate::supervisor::DispatchOutcome::Spawned { run_id }) => {
+            Json(serde_json::json!({ "run_id": run_id, "refused": false })).into_response()
+        }
+        Ok(crate::supervisor::DispatchOutcome::Refused { run_id, reason }) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "run_id": run_id, "refused": true, "error": reason })),
+        )
+            .into_response(),
+        Err(e) => internal(e, "dispatch failed"),
+    }
+}
+
+/// The abort ledger write (§06-06): effective at the worker's next status
+/// poll; the lease clock is the backstop if heartbeats stop first.
+async fn abort_run(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let now = now_ms();
+    match surge_store::observatory::abort_run(&state.pool, &id, now).await {
+        Ok(true) => {
+            if let Err(e) =
+                surge_store::audit::record(&state.pool, "run.aborted", &id, "human", None, now).await
+            {
+                return internal(e, "audit write failed");
+            }
+            Json(serde_json::json!({ "ok": true })).into_response()
+        }
+        Ok(false) => (StatusCode::CONFLICT, Json(serde_json::json!({ "error": "run is not running" })))
+            .into_response(),
+        Err(e) => internal(e, "abort failed"),
+    }
+}
+
+async fn dispatch_doc_run(State(state): State<AppState>, Path(project_id): Path<String>) -> Response {
+    match crate::supervisor::dispatch_doc_run(&state, &project_id).await {
+        Ok(run_id) => Json(serde_json::json!({ "run_id": run_id })).into_response(),
+        Err(e) => internal(e, "doc run dispatch failed"),
     }
 }

@@ -52,6 +52,7 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 ## Env var names
 
 - `DATABASE_URL` / `SQLX_OFFLINE` — sqlx dev tooling only (compile-time query checking); never read by Surge at runtime.
+- Worker-facing (injected by the supervisor at spawn, INV-AUTH-4): `SURGE_API`, `SURGE_RUN_ID`, `SURGE_ISSUE_ID`, `SURGE_RUNTIME_TOKEN`.
 
 Record names only here — values go to personal memory or local `.env` (gitignored).
 

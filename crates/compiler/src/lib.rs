@@ -9,6 +9,7 @@
 mod capability;
 mod emit;
 mod hash;
+pub mod work_order;
 mod write;
 
 pub use capability::capability_report;

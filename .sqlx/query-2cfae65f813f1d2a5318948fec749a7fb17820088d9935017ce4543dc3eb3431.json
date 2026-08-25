@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, issue_id, path, revision, content_hash, created_at\n         FROM work_order WHERE issue_id = ? ORDER BY revision DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "work_order",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "issue_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "work_order",
+            "name": "issue_id"
+          }
+        }
+      },
+      {
+        "name": "path",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "work_order",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "name": "revision",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "work_order",
+            "name": "revision"
+          }
+        }
+      },
+      {
+        "name": "content_hash",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "work_order",
+            "name": "content_hash"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "work_order",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2cfae65f813f1d2a5318948fec749a7fb17820088d9935017ce4543dc3eb3431"
+}
