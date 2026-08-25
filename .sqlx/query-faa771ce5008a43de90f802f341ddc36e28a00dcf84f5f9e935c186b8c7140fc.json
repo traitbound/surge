@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, pipeline_id, from_node, to_node, trigger, gate_required\n         FROM edge WHERE pipeline_id = ? ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "edge",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "pipeline_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "edge",
+            "name": "pipeline_id"
+          }
+        }
+      },
+      {
+        "name": "from_node",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "edge",
+            "name": "from_node"
+          }
+        }
+      },
+      {
+        "name": "to_node",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "edge",
+            "name": "to_node"
+          }
+        }
+      },
+      {
+        "name": "trigger",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "edge",
+            "name": "trigger"
+          }
+        }
+      },
+      {
+        "name": "gate_required",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "edge",
+            "name": "gate_required"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "faa771ce5008a43de90f802f341ddc36e28a00dcf84f5f9e935c186b8c7140fc"
+}

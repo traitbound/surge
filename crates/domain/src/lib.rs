@@ -1,9 +1,24 @@
-//! The Surge object model. Rust structs here are the single source of truth;
-//! TypeScript types are generated from them via `ts-rs` (ADR-1) into
-//! `ui/src/generated/` — regenerate with `cargo test -p surge-domain`.
+//! The Surge object model — the twelve entities of design §03. Rust structs
+//! here are the single source of truth (ADR-1); TypeScript is generated via
+//! `ts-rs` into `ui/src/generated/` — regenerate with `cargo test -p surge-domain`.
 //!
-//! The twelve entities (design §03) land here in Phase 0 item 2. This module
-//! currently carries only the types the scaffolded API surface needs.
+//! Two of the twelve entity headings are pairs (Issue & WorkOrder, Run & Span),
+//! so twelve entities are fourteen structs. Closed vocabularies are enums —
+//! they carry the invariants (INV-NAME-1); ids stay `String` in Phase 0.
+//!
+//! Timestamps are Unix milliseconds (`i64`, TS `number`). Semantic vs
+//! presentation split (INV-ID-2) is structural: `Node.x`/`Node.y` and other
+//! presentation fields live beside — never inside — hash-bearing content.
+
+pub mod audit;
+pub mod board;
+pub mod doc;
+pub mod fixtures;
+pub mod library;
+pub mod materialization;
+pub mod observatory;
+pub mod pipeline;
+pub mod project;
 
 use serde::Serialize;
 use ts_rs::TS;
@@ -21,15 +36,31 @@ pub struct Health {
     pub schema_version: i64,
 }
 
+/// Unix-millisecond timestamp. JSON number on the wire.
+pub type Millis = i64;
+
 #[cfg(test)]
 mod ts_export {
-    use super::*;
     use ts_rs::TS;
 
-    /// Generates the TypeScript projection. `#[ts(export)]` types export when
-    /// this test target runs; the explicit call pins the output directory.
+    /// Generates the TypeScript projection for every exported type (deps included).
     #[test]
     fn export_typescript_bindings() {
-        Health::export_all_to("../../ui/src/generated").expect("ts-rs export failed");
+        const DIR: &str = "../../ui/src/generated";
+        super::Health::export_all_to(DIR).unwrap();
+        super::project::Project::export_all_to(DIR).unwrap();
+        super::pipeline::Pipeline::export_all_to(DIR).unwrap();
+        super::pipeline::Node::export_all_to(DIR).unwrap();
+        super::pipeline::Edge::export_all_to(DIR).unwrap();
+        super::library::LibraryItem::export_all_to(DIR).unwrap();
+        super::materialization::Materialization::export_all_to(DIR).unwrap();
+        super::doc::Doc::export_all_to(DIR).unwrap();
+        super::board::Issue::export_all_to(DIR).unwrap();
+        super::board::WorkOrder::export_all_to(DIR).unwrap();
+        super::board::PlanIssue::export_all_to(DIR).unwrap();
+        super::observatory::Run::export_all_to(DIR).unwrap();
+        super::observatory::Span::export_all_to(DIR).unwrap();
+        super::observatory::Coe::export_all_to(DIR).unwrap();
+        super::audit::AuditEntry::export_all_to(DIR).unwrap();
     }
 }

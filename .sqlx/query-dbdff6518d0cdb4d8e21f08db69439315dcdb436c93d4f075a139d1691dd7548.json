@@ -1,0 +1,158 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH RECURSIVE tree(id, sort_path) AS (\n               SELECT s.id, printf('%012d', s.started_at)\n               FROM span s\n               WHERE s.run_id = ?1 AND s.parent_span_id IS NULL\n               UNION ALL\n               SELECT s.id, t.sort_path || '/' || printf('%012d', s.started_at)\n               FROM span s\n               JOIN tree t ON s.parent_span_id = t.id\n               WHERE s.run_id = ?1\n           )\n           SELECT s.id AS \"id!: String\", s.run_id, s.parent_span_id, s.node_id, s.role,\n                  s.started_at, s.duration_ms, s.status, s.cost, s.depth,\n                  s.policy_decision, s.body\n           FROM tree t JOIN span s ON s.id = t.id\n           ORDER BY t.sort_path",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "run_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "run_id"
+          }
+        }
+      },
+      {
+        "name": "parent_span_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "parent_span_id"
+          }
+        }
+      },
+      {
+        "name": "node_id",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "node_id"
+          }
+        }
+      },
+      {
+        "name": "role",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "started_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "name": "duration_ms",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "duration_ms"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "cost",
+        "ordinal": 8,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "cost"
+          }
+        }
+      },
+      {
+        "name": "depth",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "depth"
+          }
+        }
+      },
+      {
+        "name": "policy_decision",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "policy_decision"
+          }
+        }
+      },
+      {
+        "name": "body",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "body"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "dbdff6518d0cdb4d8e21f08db69439315dcdb436c93d4f075a139d1691dd7548"
+}

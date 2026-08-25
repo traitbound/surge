@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, pipeline_id, label, x, y, human_gate, emits_span,\n                metric_binding, metric_note, config\n         FROM node WHERE pipeline_id = ? ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "pipeline_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "pipeline_id"
+          }
+        }
+      },
+      {
+        "name": "label",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "name": "x",
+        "ordinal": 3,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "x"
+          }
+        }
+      },
+      {
+        "name": "y",
+        "ordinal": 4,
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "y"
+          }
+        }
+      },
+      {
+        "name": "human_gate",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "human_gate"
+          }
+        }
+      },
+      {
+        "name": "emits_span",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "emits_span"
+          }
+        }
+      },
+      {
+        "name": "metric_binding",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "metric_binding"
+          }
+        }
+      },
+      {
+        "name": "metric_note",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "metric_note"
+          }
+        }
+      },
+      {
+        "name": "config",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "node",
+            "name": "config"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "1ea334f25c42133a9a0057aab06250215bd99fe3878bad00dc2b0974062fdd9f"
+}
