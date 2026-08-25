@@ -7,6 +7,8 @@
 pub mod audit;
 pub mod observatory;
 pub mod pipelines;
+pub mod projects;
+pub mod tokens;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::path::Path;
