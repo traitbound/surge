@@ -181,7 +181,7 @@ async fn fallback_hooks_guard_and_emit() {
     // PreToolUse guard: passes while running, heartbeats on the way through…
     let before = surge_store::issues::get(&live.state.pool, "iss_p").await.unwrap().unwrap()
         .lease.unwrap().expires_at;
-    tokio::time::sleep(Duration::from_millis(10));
+    tokio::time::sleep(Duration::from_millis(10)).await;
     let (code, _) = run_hook("hooks/poll-abort.sh", &live, None).await;
     assert_eq!(code, 0);
     let after = surge_store::issues::get(&live.state.pool, "iss_p").await.unwrap().unwrap()
