@@ -8,6 +8,7 @@ mod compile_api;
 mod human_api;
 mod runtime_api;
 pub mod supervisor;
+mod ui_assets;
 
 use axum::{middleware, routing::get, Json, Router};
 use sqlx::SqlitePool;
@@ -67,6 +68,7 @@ pub fn app(state: AppState) -> Router {
         .route("/claim/{token}", get(claim::claim_session))
         .nest("/api", human)
         .nest("/runtime", runtime)
+        .fallback(ui_assets::serve)
         .with_state(state)
 }
 
