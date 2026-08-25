@@ -54,6 +54,7 @@ mod ts_export {
         super::pipeline::Edge::export_all_to(DIR).unwrap();
         super::library::LibraryItem::export_all_to(DIR).unwrap();
         super::materialization::Materialization::export_all_to(DIR).unwrap();
+        super::materialization::CapabilityReport::export_all_to(DIR).unwrap();
         super::doc::Doc::export_all_to(DIR).unwrap();
         super::board::Issue::export_all_to(DIR).unwrap();
         super::board::WorkOrder::export_all_to(DIR).unwrap();

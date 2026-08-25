@@ -6,7 +6,7 @@ Area → path → safe-parallel rules. Paths are planned; update in the same com
 |---|---|---|---|
 | server | `crates/server/` | Axum API, token middleware, dispatcher/leases, tracker mirror, SSE bridge | Yes across route modules |
 | store | `crates/store/` | SQLite pool, embedded `sqlx` migrations, typed repository functions, compile-checked queries + in-memory integration tests | Yes across repository modules; **no** two tasks touching the schema definitions at once |
-| compiler | `crates/compiler/` (or module in server initially) | pipeline → materialization, hashing, repo writes | Yes, but any change to hash inputs is `role:critical` and serialized |
+| compiler | `crates/compiler/` | pipeline → materialization, INV-ID-2 hashing, capability report, repo writes + gitignore block | Yes, but any change to hash inputs is `role:critical` and serialized |
 | domain | `crates/domain/` | the twelve entities, `ts-rs` derives, invariant-bearing types | **No** — one task at a time; every other area depends on it |
 | ui | `ui/` | React + Vite app, React Flow canvas, generated types (read-only output of domain) | Yes across surfaces; never hand-edit generated types |
 | supervisor | `crates/server/` (supervisor module) | worktree-per-lease spawn, env token injection, TTL/reclaim/abort, cost metering (INV-EXEC-1/2/3) | **No** — serialized; `role:critical` |

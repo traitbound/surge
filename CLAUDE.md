@@ -30,7 +30,7 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 - `ENGAGEMENT.md` — operational decisions (project type, repo shape, push/branch policy, ceremony tier)
 - `.halfcycle.json` — machine-readable projection of ENGAGEMENT decisions
 - `.claude/context/` — per-area agent context files (append-only)
-- `crates/` — cargo workspace: `domain` (object model, `ts-rs` derives), `store` (SQLite/`sqlx`, embedded migrations), `server` (Axum, bin `surge-server`), `cli` (bin `surge`)
+- `crates/` — cargo workspace: `domain` (object model, `ts-rs` derives), `store` (SQLite/`sqlx`, embedded migrations), `server` (Axum, bin `surge-server`), `cli` (bin `surge`), `compiler` (materialization compiler + INV-ID-2 hashing; hash-input changes are `role:critical`)
 - `ui/` — Vite + React app; `ui/src/generated/` is ts-rs output (gitignored, regenerate via domain tests, never hand-edit)
 - `integrations/claude-plugin/` — Claude Code plugin (MCP server + hooks, ADR-8); lands with Phase 0 item 6
 

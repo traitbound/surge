@@ -4,6 +4,7 @@
 
 pub mod auth;
 mod claim;
+mod compile_api;
 mod human_api;
 mod runtime_api;
 

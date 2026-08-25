@@ -5,6 +5,8 @@
 //! also fire the commit broadcast once the event bus lands (ADR-3).
 
 pub mod audit;
+pub mod library;
+pub mod materializations;
 pub mod observatory;
 pub mod pipelines;
 pub mod projects;
