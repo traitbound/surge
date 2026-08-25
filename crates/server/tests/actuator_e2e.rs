@@ -161,9 +161,11 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
     // its env by writing what it sees into a file OUTSIDE the worktree.
     let env = setup(
         "#!/bin/sh\n\
-         echo \"wo=$1 run=$SURGE_RUN_ID tok=${SURGE_RUNTIME_TOKEN%%${SURGE_RUNTIME_TOKEN#rt_}} pwd=$PWD\" > \"$OUT\"\n\
+         stdin=$(cat)\n\
+         echo \"run=$SURGE_RUN_ID tok=${SURGE_RUNTIME_TOKEN%%${SURGE_RUNTIME_TOKEN#rt_}} plugin=$SURGE_PLUGIN_DIR\" > \"$OUT\"\n\
+         echo \"$stdin\" | grep -q 'Work order — Fixture task' && echo stdin-workorder >> \"$OUT\"\n\
          test -f .claude/settings.json && echo compiled >> \"$OUT\"\n\
-         test -f \"$1\" && echo workorder >> \"$OUT\"\n\
+         test -f \"work_orders/$SURGE_ISSUE_ID.md\" && echo workorder >> \"$OUT\"\n\
          git rev-parse --abbrev-ref HEAD >> \"$OUT\"\n\
          exit 0\n",
     ).await;
@@ -179,8 +181,9 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
     assert_eq!(wait_terminal(&env, &out, 5_000).await, RunStatus::Succeeded);
 
     let observed = std::fs::read_to_string(env.work.path().join("observed.txt")).unwrap();
-    assert!(observed.contains("wo=work_orders/iss_1.md"), "{observed}");
+    assert!(observed.contains("stdin-workorder"), "work order delivered on stdin (F2): {observed}");
     assert!(observed.contains(&format!("run={out}")), "{observed}");
+    assert!(observed.contains("plugin=/"), "SURGE_PLUGIN_DIR is absolute (F3): {observed}");
     assert!(observed.contains("tok=rt_"), "runtime token injected (INV-AUTH-4): {observed}");
     assert!(observed.contains("compiled"), "materialization compiled into worktree: {observed}");
     assert!(observed.contains("workorder"), "rendered work order present: {observed}");
@@ -323,4 +326,81 @@ async fn reqwest_lite(url: &str, token: &str, post: bool) -> (u16, String) {
     let text = String::from_utf8_lossy(&out.stdout);
     let (body, code) = text.rsplit_once('\n').unwrap();
     (code.trim().parse().unwrap(), body.to_string())
+}
+
+/// F1 regression: a RELATIVE work_dir (the shipped default's shape) must
+/// resolve against the server's cwd — never against the bound repo — and
+/// dispatch must work with the server's cwd nowhere near the repo.
+#[tokio::test]
+async fn relative_work_dir_resolves_outside_the_bound_repo() {
+    let env = setup("#!/bin/sh\ncat >/dev/null\nexit 0\n").await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let rel = format!("tmp-e2e-worktrees-{}", std::process::id());
+    let mut cfg = (*env.state.supervisor).clone();
+    cfg.work_dir = rel.clone().into(); // relative, like the default
+    let state = AppState::with_supervisor(env.state.pool.clone(), cfg);
+
+    let run_id = match surge_server::supervisor::dispatch_issue(&state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Succeeded);
+    // The worktree never existed inside the bound repo (INV-DATA-1/EXEC-2).
+    assert!(!env.repo.path().join(&rel).exists(), "worktree landed inside the bound repo");
+    assert!(!env.repo.path().join("surge-worktrees").exists());
+    // It lived under cwd and was reaped.
+    let local = std::path::absolute(&rel).unwrap();
+    assert!(!local.join("prj_fix/iss_1").exists(), "worktree reaped");
+    let _ = std::fs::remove_dir_all(&local);
+}
+
+/// F4 regression (spawn half): a dispatch that fails after the lease claim
+/// leaks nothing — run failed with a reason span, lease released, no worktree.
+#[tokio::test]
+async fn failed_spawn_releases_the_lease_and_reaps() {
+    let env = setup("#!/bin/sh\nexit 0\n").await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let mut cfg = (*env.state.supervisor).clone();
+    cfg.worker_cmd = vec!["/nonexistent-worker-binary".into()];
+    let state = AppState::with_supervisor(env.state.pool.clone(), cfg);
+
+    assert!(surge_server::supervisor::dispatch_issue(&state, &issue.id).await.is_err());
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Failed);
+    assert!(issue.lease.is_none(), "lease released (F4)");
+    assert!(!worktree_dir(&env).exists(), "worktree reaped (F4)");
+    // The run is a visible failure with the reason, not an orphaned `running`.
+    let runs = surge_store::observatory::list_runs(&env.state.pool, Some("prj_fix")).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, RunStatus::Failed);
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &runs[0].id).await.unwrap();
+    assert!(spans.iter().any(|s| s.body.as_deref().unwrap_or("").contains("worker spawn failed")));
+}
+
+/// F4 regression (observability half): a failing worker's stderr tail lands
+/// in the failure span — refusals are data (INV-ERR-1).
+#[tokio::test]
+async fn worker_stderr_tail_is_a_visible_record() {
+    let env = setup("#!/bin/sh\ncat >/dev/null\necho 'boom: mcp config invalid' >&2\nexit 3\n").await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let run_id = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+        if spans.iter().any(|s| {
+            let b = s.body.as_deref().unwrap_or("");
+            b.contains("exited with 3") && b.contains("boom: mcp config invalid")
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "stderr tail never landed in a span: {spans:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
