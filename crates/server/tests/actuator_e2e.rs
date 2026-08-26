@@ -741,3 +741,64 @@ async fn a_failed_issue_can_be_retried_and_redispatched() {
         .unwrap();
     assert!(!surge_store::issues::mark_eligible_again(&env.state.pool, "iss_1").await.unwrap());
 }
+
+/// S2: a runtime credential must not outlive its run. It stays live while the
+/// worker runs (an abort has to reach it through a status poll), and is dead
+/// once the supervisor has observed the process gone.
+#[tokio::test]
+async fn a_runtime_token_dies_with_its_run() {
+    let env = setup(&format!("#!/bin/sh\ncat >/dev/null\n{}exit 0\n", SPAN_CURL)).await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let live = |pool: sqlx::SqlitePool| async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM token WHERE kind = 'runtime' AND revoked_at IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(live(env.state.pool.clone()).await, 0);
+    let run_id = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Succeeded);
+    // The monitor revokes after observing the exit; give it a beat.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while live(env.state.pool.clone()).await > 0 {
+        assert!(std::time::Instant::now() < deadline, "runtime token outlived its run");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // The binding is what makes that possible at all.
+    let bound: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM token WHERE run_id = ?")
+        .bind(&run_id)
+        .fetch_one(&env.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(bound, 1, "the credential is bound to its run");
+}
+
+/// S4: abort is the one human-initiated destructive act, and it wrote no span
+/// — the observatory showed a stopped run with no stated reason.
+#[tokio::test]
+async fn abort_writes_a_reason_span_and_audits_the_project() {
+    let env = setup("#!/bin/sh\nsleep 30\n").await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let run_id = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    let resp = surge_server::supervisor::abort_run(&env.state, &run_id).await;
+    assert!(resp, "abort landed");
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert!(
+        spans.iter().any(|s| s.id.starts_with("sp_abort_")
+            && s.policy_decision.as_deref().unwrap_or("").contains("next tool call")),
+        "the abort states its reason: {spans:?}"
+    );
+    let audited = surge_store::audit::recent(&env.state.pool, 50).await.unwrap();
+    let row = audited.iter().find(|a| a.action == "run.aborted").expect("run.aborted audited");
+    assert_eq!(row.project_id.as_deref(), Some("prj_fix"), "filterable by project (N13)");
+}

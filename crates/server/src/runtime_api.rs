@@ -206,12 +206,20 @@ async fn claim_lease(
     {
         Ok(true) => {}
         Ok(false) => {
+            // Every refusal is data, whichever token kind reached it: this
+            // branch used to terminalize the run and return, leaving the only
+            // spanless, auditless refusal in the product (smoke walk 4, S3).
+            let reason = "lease claim refused — issue is not eligible or already leased";
             let _ = surge_store::observatory::finish_run_if_running(
                 &state.pool, &run_id, surge_domain::observatory::RunStatus::Refused, now,
             )
             .await;
-            return (StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": "issue is not eligible or already leased" })))
+            let _ = crate::supervisor::refusal_span(&state, &run_id, reason, now).await;
+            let _ = surge_store::audit::record(
+                &state.pool, "lease.claim_refused", &issue_id, &owner, Some(&issue.project_id), now,
+            )
+            .await;
+            return (StatusCode::CONFLICT, Json(serde_json::json!({ "error": reason })))
                 .into_response();
         }
         Err(e) => return internal(e, "lease claim failed"),

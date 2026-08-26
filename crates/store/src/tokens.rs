@@ -54,20 +54,53 @@ pub async fn mint(
     project_id: Option<&str>,
     now: i64,
 ) -> anyhow::Result<String> {
+    mint_for_run(pool, kind, project_id, None, now).await
+}
+
+/// Mint a credential bound to one run. The binding is what makes revocation
+/// possible at all: the supervisor discards the plaintext at spawn, so a
+/// token with no `run_id` can never be revoked by the lifecycle that created
+/// it (smoke walk 4, S2).
+pub async fn mint_for_run(
+    pool: &SqlitePool,
+    kind: TokenKind,
+    project_id: Option<&str>,
+    run_id: Option<&str>,
+    now: i64,
+) -> anyhow::Result<String> {
     debug_assert_eq!(kind == TokenKind::Runtime, project_id.is_some());
     let plaintext = generate(kind);
     let token_hash = hash(&plaintext);
     let kind_s = kind.as_str();
     sqlx::query!(
-        "INSERT INTO token (kind, token_hash, project_id, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO token (kind, token_hash, project_id, run_id, created_at)
+         VALUES (?, ?, ?, ?, ?)",
         kind_s,
         token_hash,
         project_id,
+        run_id,
         now
     )
     .execute(pool)
     .await?;
     Ok(plaintext)
+}
+
+/// Revoke every credential bound to a run. Called from the same transaction
+/// that terminalizes the run, so a token cannot outlive the work it was
+/// issued for (S2).
+pub async fn revoke_for_run<'e, E>(executor: E, run_id: &str, now: i64) -> anyhow::Result<u64>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let res = sqlx::query!(
+        "UPDATE token SET revoked_at = ? WHERE run_id = ? AND revoked_at IS NULL",
+        now,
+        run_id
+    )
+    .execute(executor)
+    .await?;
+    Ok(res.rows_affected())
 }
 
 /// Resolve a presented plaintext to an identity. Claim tokens are not

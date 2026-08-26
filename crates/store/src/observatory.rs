@@ -218,15 +218,23 @@ pub async fn finish_run_if_running(
     ended_at: i64,
 ) -> anyhow::Result<bool> {
     let status_s = status.as_str();
+    let mut tx = pool.begin().await?;
     let res = sqlx::query!(
         "UPDATE run SET status = ?, ended_at = ? WHERE id = ? AND status = 'running'",
         status_s,
         ended_at,
         run_id
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    Ok(res.rows_affected() == 1)
+    let moved = res.rows_affected() == 1;
+    if moved {
+        // The run's credential dies with the run, in the same transaction —
+        // no lifecycle path can forget it (INV-DATA-8; smoke walk 4, S2).
+        crate::tokens::revoke_for_run(&mut *tx, run_id, ended_at).await?;
+    }
+    tx.commit().await?;
+    Ok(moved)
 }
 
 /// Resolve every span still `running` on a run the supervisor has just
@@ -265,6 +273,10 @@ pub async fn resolve_dangling_spans(
 /// The abort ledger write (§06): takes effect at the executor's next status
 /// poll. Returns false if the run was already terminal.
 pub async fn abort_run(pool: &SqlitePool, run_id: &str, now: i64) -> anyhow::Result<bool> {
+    // Deliberately does NOT revoke the run's credential: an abort lands at the
+    // worker's next status poll (§06-06), and that poll needs a live token.
+    // Revocation happens once the supervisor observes the process gone
+    // (`supervisor::monitor`) or a reconcile/sweep terminalizes it.
     let res = sqlx::query!(
         "UPDATE run SET status = 'aborted', ended_at = ? WHERE id = ? AND status = 'running'",
         now,

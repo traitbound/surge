@@ -140,7 +140,37 @@ async fn refusal_run(
 /// refusal branch appends it — the lease-lost branch used to write a refusal
 /// run with no span at all, so the reason existed only in the HTTP response
 /// and the audit row (smoke walk 3, N6).
-async fn refusal_span(
+/// The coordinator span recording a human abort (§06-06). Shares the shape of
+/// every other terminalization span so the observatory never shows a run that
+/// stopped for no stated reason (smoke walk 4, S4).
+pub(crate) async fn abort_span(
+    state: &AppState,
+    run_id: &str,
+    reason: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    surge_store::observatory::append_span(&state.pool, &Span {
+        id: format!("sp_abort_{run_id}"),
+        run_id: run_id.to_string(),
+        parent_span_id: None,
+        node_id: None,
+        role: SpanRole::Coordinator,
+        started_at: now,
+        duration_ms: Some(0),
+        // `Error`, matching the orphan/drain spans: the run ended without
+        // completing. Whether abnormal-but-deliberate deserves its own
+        // SpanStatus is a Phase 1 call — the variant is ts-rs-exported with a
+        // schema CHECK and UI pill mapping behind it.
+        status: SpanStatus::Error,
+        cost: 0.0,
+        depth: 0,
+        policy_decision: Some(reason.into()),
+        body: Some(reason.into()),
+    })
+    .await
+}
+
+pub(crate) async fn refusal_span(
     state: &AppState,
     run_id: &str,
     reason: &str,
@@ -255,10 +285,11 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
     // The credential is minted before the fallible work below so the failure
     // path can revoke it — an undelivered runtime token must not outlive the
     // dispatch that needed it (INV-AUTH-4; smoke walk 3, N1).
-    let runtime_token = match surge_store::tokens::mint(
+    let runtime_token = match surge_store::tokens::mint_for_run(
         &state.pool,
         surge_store::tokens::TokenKind::Runtime,
         Some(&project.id),
+        Some(&run_id),
         now,
     )
     .await
@@ -354,6 +385,30 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
         Some(guard),
     ));
     Ok(DispatchOutcome::Spawned { run_id })
+}
+
+/// The human abort: ledger write, reason span, audit — in one place so the
+/// HTTP handler and tests cannot drift (§06-06).
+pub async fn abort_run(state: &AppState, run_id: &str) -> bool {
+    let now = now_ms();
+    let project_id = surge_store::observatory::get_run(&state.pool, run_id)
+        .await
+        .ok()
+        .map(|r| r.project_id);
+    let moved = surge_store::observatory::abort_run(&state.pool, run_id, now)
+        .await
+        .unwrap_or(false);
+    if moved {
+        let _ = abort_span(state, run_id, "aborted by the operator — takes effect at the \
+             executor's next tool call; if heartbeats stop first, the lease reclaims at TTL \
+             (§06-06)", now)
+        .await;
+        let _ = surge_store::audit::record(
+            &state.pool, "run.aborted", run_id, "human", project_id.as_deref(), now,
+        )
+        .await;
+    }
+    moved
 }
 
 type StderrTail = tokio::sync::oneshot::Receiver<String>;
@@ -611,6 +666,10 @@ async fn monitor(
     let moved = surge_store::observatory::finish_run_if_running(&state.pool, &run_id, status, now)
         .await
         .unwrap_or(false);
+    // The worker process is gone, so its credential has no further legitimate
+    // use — revoke unconditionally, including on the abort path where the run
+    // was already terminal and `finish_run_if_running` was a no-op (S2).
+    let _ = surge_store::tokens::revoke_for_run(&state.pool, &run_id, now).await;
     let final_status = if moved {
         status
     } else {
@@ -717,10 +776,11 @@ pub async fn dispatch_doc_run(state: &AppState, project_id: &str) -> anyhow::Res
         cost: 0.0,
     };
     surge_store::observatory::insert_run(&state.pool, &run).await?;
-    let runtime_token = surge_store::tokens::mint(
+    let runtime_token = surge_store::tokens::mint_for_run(
         &state.pool,
         surge_store::tokens::TokenKind::Runtime,
         Some(&project.id),
+        Some(&run_id),
         now,
     )
     .await?;
