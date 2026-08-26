@@ -7,8 +7,11 @@
 //! `200 text/html` (walk-3 finding N11).
 //!
 //! `ui/dist/` is a build artefact: run `npm run build` in `ui/` before a
-//! release build. A dev tree without it still compiles (the directory holds a
-//! committed .gitkeep) and serves a pointer to the dev workflow instead.
+//! release build. A dev tree without it still compiles — `build.rs` creates
+//! the directory — and serves a pointer to the dev workflow instead. Nothing
+//! in `ui/dist/` is tracked: an empty `.gitkeep` was the old guarantee and it
+//! was silently deleted twice, once by `npm run build` plus `git add -A`
+//! (smoke walk 4, S1).
 
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
