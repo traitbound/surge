@@ -155,3 +155,44 @@ fn write_to_repo_lands_files_and_maintains_gitignore_block() {
     assert!(gi.contains("work_orders/"));
     assert!(!gi.contains("\nsurge.yaml"), "surge.yaml stays committed (INV-DATA-7)");
 }
+
+/// INV-ID-2, the case the original test never built: a Block node's collapse
+/// state is canvas state and must not change the pipeline's identity. Hashing
+/// `NodeConfig` wholesale meant it did (review 2026-08-26).
+#[test]
+fn block_collapse_state_never_enters_the_hash() {
+    use surge_domain::pipeline::{Node, NodeConfig};
+    let (_, mut nodes, edges) = fixtures::two_node_pipeline();
+    let block = |collapsed: bool| Node {
+        id: "nd_block".into(),
+        pipeline_id: "pl_two_node_v1".into(),
+        label: "Group".into(),
+        x: 0.0,
+        y: 0.0,
+        human_gate: false,
+        emits_span: false,
+        metric_binding: None,
+        metric_note: None,
+        config: NodeConfig::Block {
+            members: vec!["nd_write_summary".into(), "nd_implement".into()],
+            exposed_params: vec!["model".into()],
+            collapsed,
+        },
+    };
+
+    nodes.push(block(false));
+    let open = pipeline_content_hash(&nodes, &edges);
+    nodes.pop();
+    nodes.push(block(true));
+    let shut = pipeline_content_hash(&nodes, &edges);
+    assert_eq!(open, shut, "collapse state is presentation (INV-ID-2)");
+
+    // But the block's semantic content still counts.
+    nodes.pop();
+    let mut different = block(true);
+    if let NodeConfig::Block { members, .. } = &mut different.config {
+        members.pop();
+    }
+    nodes.push(different);
+    assert_ne!(pipeline_content_hash(&nodes, &edges), open, "membership is semantic");
+}
