@@ -149,3 +149,36 @@ pub async fn release_lease(
     .await?;
     Ok(())
 }
+
+/// One held lease, flattened for the supervisor's boot reconcile and its
+/// standing sweeper: enough to terminalize the run, release the lease and
+/// name the worktree without a second query per row (smoke walk 3, N2).
+#[derive(Debug, Clone)]
+pub struct HeldLease {
+    pub issue_id: String,
+    pub project_id: String,
+    pub run_id: String,
+    pub expires_at: i64,
+}
+
+/// Every lease currently held, whatever its clock says. The sweeper reads
+/// this on its own schedule: TTL enforcement must not depend on a per-run
+/// monitor task existing, since that task dies with the process (N2).
+pub async fn held_leases(pool: &SqlitePool) -> anyhow::Result<Vec<HeldLease>> {
+    let rows = sqlx::query!(
+        "SELECT id, project_id, lease_run_id, lease_expires_at
+         FROM issue WHERE lease_owner IS NOT NULL
+         ORDER BY lease_expires_at"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| HeldLease {
+            issue_id: r.id,
+            project_id: r.project_id,
+            run_id: r.lease_run_id.expect("CHECK: all-or-nothing lease"),
+            expires_at: r.lease_expires_at.expect("CHECK"),
+        })
+        .collect())
+}

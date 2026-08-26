@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE span SET status = 'error', policy_decision = ?\n         WHERE run_id = ? AND status = 'running'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8b43b23f53a3b21c01624b3d005cc5646f2b39980e8775ed3aea434d588d6779"
+}
