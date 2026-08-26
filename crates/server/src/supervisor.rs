@@ -180,13 +180,12 @@ async fn refusal_run(
 /// The coordinator span recording a human abort (§06-06). Shares the shape of
 /// every other terminalization span so the observatory never shows a run that
 /// stopped for no stated reason (smoke walk 4, S4).
-pub(crate) async fn abort_span(
-    state: &AppState,
-    run_id: &str,
-    reason: &str,
-    now: i64,
-) -> anyhow::Result<()> {
-    surge_store::observatory::append_span(&state.pool, &Span {
+/// The abort reason span as a value, so it can be appended inside the same
+/// transaction as the ledger write (INV-DATA-8).
+pub(crate) fn abort_span_row(run_id: &str, now: i64) -> Span {
+    let reason = "aborted by the operator — takes effect at the executor's next tool call; \
+                  if heartbeats stop first, the lease reclaims at TTL (§06-06)";
+    Span {
         id: format!("sp_abort_{run_id}"),
         run_id: run_id.to_string(),
         parent_span_id: None,
@@ -203,8 +202,7 @@ pub(crate) async fn abort_span(
         depth: 0,
         policy_decision: Some(reason.into()),
         body: Some(reason.into()),
-    })
-    .await
+    }
 }
 
 pub(crate) async fn refusal_span(
@@ -489,24 +487,29 @@ pub async fn abort_run(state: &AppState, run_id: &str) -> bool {
         .await
         .ok()
         .map(|r| r.project_id);
-    let moved = surge_store::observatory::abort_run(&state.pool, run_id, now)
-        .await
-        .unwrap_or(false);
-    if moved {
-        log_span_failure(
-            abort_span(state, run_id, "aborted by the operator — takes effect at the \
-                 executor's next tool call; if heartbeats stop first, the lease reclaims at TTL \
-                 (§06-06)", now)
-            .await,
-            "abort",
-            run_id,
-        );
-        let _ = surge_store::audit::record(
-            &state.pool, "run.aborted", run_id, "human", project_id.as_deref(), now,
-        )
-        .await;
+    // Ledger write, reason span and audit entry commit as one (INV-DATA-8):
+    // abort is a privileged act, and a crash between the ledger and the audit
+    // row left a stopped run nobody was recorded as stopping (INV-OBS-1).
+    let aborted = async {
+        let mut tx = state.pool.begin().await?;
+        let moved = surge_store::observatory::abort_run(&mut *tx, run_id, now).await?;
+        if moved {
+            surge_store::observatory::append_span(&mut *tx, &abort_span_row(run_id, now)).await?;
+            surge_store::audit::record(
+                &mut *tx, "run.aborted", run_id, "human", project_id.as_deref(), now,
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok::<_, anyhow::Error>(moved)
+    };
+    match aborted.await {
+        Ok(moved) => moved,
+        Err(e) => {
+            eprintln!("abort commit failed for {run_id}: {e}");
+            false
+        }
     }
-    moved
 }
 
 type StderrTail = tokio::sync::oneshot::Receiver<String>;
@@ -1170,18 +1173,36 @@ pub async fn sweep_expired_leases(state: &AppState) -> usize {
         }
         // The run was already terminal but the lease outlived it — the half
         // of N2 that left an issue permanently undispatchable.
-        if release_if_held(state, &lease.issue_id, &lease.run_id, OrchestrationStatus::Failed).await {
-            reap_orphan_worktree(state, &lease.project_id, &lease.issue_id).await;
-            let _ = surge_store::audit::record(
-                &state.pool,
-                "lease.reclaimed",
-                &format!("{}:{}", lease.issue_id, lease.run_id),
-                "supervisor",
-                Some(&lease.project_id),
-                now,
+        // Release and audit commit together (INV-DATA-8): a crash between them
+        // silently returned an issue to the pool with no record of why it was
+        // reclaimed — the exact scenario the store review named.
+        let reclaimed = async {
+            let mut tx = state.pool.begin().await?;
+            let released = surge_store::issues::release_lease(
+                &mut *tx, &lease.issue_id, &lease.run_id, OrchestrationStatus::Failed,
             )
-            .await;
-            n += 1;
+            .await?;
+            if released {
+                surge_store::audit::record(
+                    &mut *tx,
+                    "lease.reclaimed",
+                    &format!("{}:{}", lease.issue_id, lease.run_id),
+                    "supervisor",
+                    Some(&lease.project_id),
+                    now,
+                )
+                .await?;
+            }
+            tx.commit().await?;
+            Ok::<_, anyhow::Error>(released)
+        };
+        match reclaimed.await {
+            Ok(true) => {
+                reap_orphan_worktree(state, &lease.project_id, &lease.issue_id).await;
+                n += 1;
+            }
+            Ok(false) => {}
+            Err(e) => eprintln!("lease reclaim commit failed for {}: {e}", lease.issue_id),
         }
     }
     n

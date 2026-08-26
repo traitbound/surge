@@ -95,20 +95,26 @@ pub async fn compile_project(
         fresh: true,
         created_at: now,
     };
-    if let Err(e) = surge_store::materializations::insert_fresh(&state.pool, &materialization).await {
-        return internal(e, "materialization insert failed");
-    }
-    if let Err(e) = surge_store::audit::record(
-        &state.pool,
-        "pipeline.compiled",
-        &compiled.materialization_hash,
-        "human",
-        Some(&project_id),
-        now,
-    )
-    .await
-    {
-        return internal(e, "audit write failed");
+    // The materialization row and its audit entry commit together (INV-DATA-8):
+    // compiling changes dispatch eligibility (INV-ID-1), so a fresh
+    // materialization with no audit row is a privileged act with no record.
+    let commit = async {
+        let mut tx = state.pool.begin().await?;
+        surge_store::materializations::insert_fresh(&mut tx, &materialization).await?;
+        surge_store::audit::record(
+            &mut *tx,
+            "pipeline.compiled",
+            &compiled.materialization_hash,
+            "human",
+            Some(&project_id),
+            now,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok::<_, anyhow::Error>(())
+    };
+    if let Err(e) = commit.await {
+        return internal(e, "compile commit failed");
     }
 
     Json(serde_json::json!({

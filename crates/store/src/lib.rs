@@ -453,6 +453,53 @@ mod object_model_tests {
         assert!(crate::issues::heartbeat(&pool, "iss_1", None, 7_000, 1_000).await.unwrap());
     }
 
+    /// INV-DATA-8, proven rather than asserted: a state change and its audit
+    /// entry share a transaction, so if the audit write fails the state change
+    /// is not visible either. Before this, every server handler committed the
+    /// two separately and a crash in between produced a privileged act with no
+    /// record — INV-OBS-1's guarantee failing through INV-DATA-8's crack.
+    #[tokio::test]
+    async fn state_change_and_audit_roll_back_together() {
+        let pool = crate::open_in_memory().await.unwrap();
+        seed_project_and_pipeline(&pool).await;
+        let mat = surge_domain::materialization::Materialization {
+            id: "mk_tx".into(),
+            content_hash: "sha256:tx".into(),
+            cache_key: "mk_tx..fixture".into(),
+            pipeline_id: "pl_two_node_v1".into(),
+            project_id: "prj_fixture".into(),
+            signed_by: "st_test".into(),
+            fresh: true,
+            created_at: 1,
+        };
+
+        // A transaction that writes the state change, then fails its audit
+        // entry (an over-long action violates the schema CHECK), then rolls back.
+        let mut tx = pool.begin().await.unwrap();
+        crate::materializations::insert_fresh(&mut tx, &mat).await.unwrap();
+        let bad_audit = crate::audit::record(
+            &mut *tx, "", "subject", "actor", Some("prj_absent"), 1,
+        )
+        .await;
+        assert!(bad_audit.is_err(), "the audit write must fail for this test to mean anything");
+        drop(tx); // no commit — the whole unit unwinds
+
+        assert!(
+            crate::materializations::fresh_for_project(&pool, "prj_fixture").await.unwrap().is_none(),
+            "the materialization must not survive an audit failure"
+        );
+
+        // And the happy path commits both.
+        let mut tx = pool.begin().await.unwrap();
+        crate::materializations::insert_fresh(&mut tx, &mat).await.unwrap();
+        crate::audit::record(&mut *tx, "pipeline.compiled", "sha256:tx", "human", Some("prj_fixture"), 2)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert!(crate::materializations::fresh_for_project(&pool, "prj_fixture").await.unwrap().is_some());
+        assert!(crate::audit::recent(&pool, 10).await.unwrap().iter().any(|a| a.action == "pipeline.compiled"));
+    }
+
     #[tokio::test]
     async fn audit_appends_and_reads_back() {
         let pool = crate::open_in_memory().await.unwrap();

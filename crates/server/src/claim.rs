@@ -34,23 +34,27 @@ pub async fn claim_session(
             return (StatusCode::INTERNAL_SERVER_ERROR, "claim backend error").into_response();
         }
     }
-    let session = match surge_store::tokens::mint(&state.pool, TokenKind::Session, None, now).await
-    {
+    // Minting the session and recording the claim commit together
+    // (INV-DATA-8): a session that exists with no record of being claimed is
+    // the one privileged act INV-AUTH-5 exists to make visible.
+    let minted = async {
+        let mut tx = state.pool.begin().await?;
+        let session =
+            surge_store::tokens::mint(&mut *tx, TokenKind::Session, None, now).await?;
+        surge_store::audit::record(
+            &mut *tx, "auth.session_claimed", "/claim", "human", None, now,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok::<_, anyhow::Error>(session)
+    };
+    let session = match minted.await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("session mint failed: {e}");
+            eprintln!("session claim commit failed: {e}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "claim backend error").into_response();
         }
     };
-    let _ = surge_store::audit::record(
-        &state.pool,
-        "auth.session_claimed",
-        "/claim",
-        "human",
-        None,
-        now,
-    )
-    .await;
     (
         StatusCode::OK,
         [(

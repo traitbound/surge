@@ -27,7 +27,10 @@ pub async fn insert_run(pool: &SqlitePool, run: &Run) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn append_span(pool: &SqlitePool, span: &Span) -> anyhow::Result<()> {
+pub async fn append_span<'e, E>(executor: E, span: &Span) -> anyhow::Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let role = span.role.as_str();
     let status = span.status.as_str();
     sqlx::query!(
@@ -47,7 +50,7 @@ pub async fn append_span(pool: &SqlitePool, span: &Span) -> anyhow::Result<()> {
         span.policy_decision,
         span.body
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -272,7 +275,10 @@ pub async fn resolve_dangling_spans(
 
 /// The abort ledger write (§06): takes effect at the executor's next status
 /// poll. Returns false if the run was already terminal.
-pub async fn abort_run(pool: &SqlitePool, run_id: &str, now: i64) -> anyhow::Result<bool> {
+pub async fn abort_run<'e, E>(executor: E, run_id: &str, now: i64) -> anyhow::Result<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     // Deliberately does NOT revoke the run's credential: an abort lands at the
     // worker's next status poll (§06-06), and that poll needs a live token.
     // Revocation happens once the supervisor observes the process gone
@@ -282,7 +288,7 @@ pub async fn abort_run(pool: &SqlitePool, run_id: &str, now: i64) -> anyhow::Res
         now,
         run_id
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(res.rows_affected() == 1)
 }

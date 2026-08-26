@@ -1,7 +1,13 @@
 //! Materialization repository (INV-ID-1). Inserting a fresh materialization
-//! and staling the project's previous ones commit as one transaction with the
-//! caller's audit entry kept adjacent (INV-DATA-8 discipline lives in the
-//! server handler until the event bus lands).
+//! and staling the project's previous ones happen on a caller-supplied
+//! connection so BOTH commit with the caller's audit entry in one transaction
+//! (INV-DATA-8).
+//!
+//! The previous note here said INV-DATA-8 "lives in the server handler until
+//! the event bus lands" — conflating this invariant with ADR-3's commit
+//! broadcast. The broadcast is legitimately deferred to Phase 2; the
+//! invariant never was, and that sentence is how the gap stayed invisible
+//! through five smoke walks (review 2026-08-26).
 
 use sqlx::SqlitePool;
 use surge_domain::materialization::Materialization;
@@ -10,10 +16,16 @@ use surge_domain::materialization::Materialization;
 /// ones, atomically. Recompiling identical content is a cache hit: the same
 /// cache key re-freshens the existing row rather than minting a duplicate
 /// identity (INV-ID-1: one hash, one materialization).
-pub async fn insert_fresh(pool: &SqlitePool, m: &Materialization) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
+/// Takes a connection rather than the pool so the caller can compose this
+/// with its audit entry in ONE transaction (INV-DATA-8). Compiling changes
+/// dispatch eligibility (INV-ID-1); a crash between the state change and the
+/// audit row left a privileged act unrecorded.
+pub async fn insert_fresh(
+    conn: &mut sqlx::SqliteConnection,
+    m: &Materialization,
+) -> anyhow::Result<()> {
     sqlx::query!("UPDATE materialization SET fresh = 0 WHERE project_id = ? AND fresh = 1", m.project_id)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     let fresh = m.fresh as i64;
     sqlx::query!(
@@ -31,8 +43,17 @@ pub async fn insert_fresh(pool: &SqlitePool, m: &Materialization) -> anyhow::Res
         fresh,
         m.created_at
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?;
+    Ok(())
+}
+
+/// Standalone insert for callers with nothing else to commit (fixtures,
+/// tests). Production paths use [`insert_fresh`] inside their own transaction
+/// so the audit entry lands with it (INV-DATA-8).
+pub async fn insert_fresh_committed(pool: &SqlitePool, m: &Materialization) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    insert_fresh(&mut tx, m).await?;
     tx.commit().await?;
     Ok(())
 }
