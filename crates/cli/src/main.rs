@@ -49,6 +49,8 @@ enum Command {
     Dispatch { issue_id: String },
     /// Abort a run — effective at the worker's next status poll (§06-06).
     Abort { run_id: String },
+    /// Put a failed or aborted issue back in the eligible column (§06).
+    Retry { issue_id: String },
 }
 
 // ---------------------------------------------------------------- token file
@@ -388,6 +390,19 @@ fn cmd_abort(client: &Client, run_id: &str, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn cmd_retry(client: &Client, issue_id: &str, json: bool) -> anyhow::Result<()> {
+    let resp = client
+        .post(&format!("/api/issues/{issue_id}/retry"), None)
+        .map_err(|e| e.into_anyhow(&client.base))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        let retries = resp.get("retry_count").and_then(|v| v.as_i64()).unwrap_or(0);
+        println!("issue {issue_id} is eligible again (retry {retries}) — dispatch when ready");
+    }
+    Ok(())
+}
+
 fn run() -> anyhow::Result<()> {
     let args = Args::parse();
     match args.command {
@@ -406,6 +421,7 @@ fn run() -> anyhow::Result<()> {
         }
         Command::Dispatch { issue_id } => cmd_dispatch(&Client::new()?, &issue_id, args.json),
         Command::Abort { run_id } => cmd_abort(&Client::new()?, &run_id, args.json),
+        Command::Retry { issue_id } => cmd_retry(&Client::new()?, &issue_id, args.json),
     }
 }
 

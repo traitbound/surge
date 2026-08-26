@@ -182,3 +182,20 @@ pub async fn held_leases(pool: &SqlitePool) -> anyhow::Result<Vec<HeldLease>> {
         })
         .collect())
 }
+
+/// Operator recovery: move a terminally-failed issue back to eligible so it
+/// can be dispatched again (§06 — the retry count is on the card). Guarded to
+/// terminal, unleased states: `verified` work is done, and a `leased` issue
+/// has a live claimant. Auto-retry policy and the cap-at-3 rule are the
+/// dispatcher's (Phase 2); this is the human-initiated path that keeps a
+/// reconciled run from being a dead end (smoke walk 3, N2).
+pub async fn mark_eligible_again(pool: &SqlitePool, issue_id: &str) -> anyhow::Result<bool> {
+    let res = sqlx::query!(
+        "UPDATE issue SET status = 'eligible', retry_count = retry_count + 1
+         WHERE id = ? AND lease_owner IS NULL AND status IN ('failed', 'aborted')",
+        issue_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() == 1)
+}

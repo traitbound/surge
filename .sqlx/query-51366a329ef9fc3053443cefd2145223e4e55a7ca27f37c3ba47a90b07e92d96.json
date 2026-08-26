@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE issue SET status = 'eligible', retry_count = retry_count + 1\n         WHERE id = ? AND lease_owner IS NULL AND status IN ('failed', 'aborted')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "51366a329ef9fc3053443cefd2145223e4e55a7ca27f37c3ba47a90b07e92d96"
+}

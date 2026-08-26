@@ -40,7 +40,7 @@ See [`architecture.md`](architecture.md) for the diagram (must agree exactly wit
 
 **Claude Code plugin via MCP — decided 2026-08-12 (design §23-Eighteen).** Surge ships a Claude Code plugin (`integrations/claude-plugin/`) bundling an MCP server that exposes the five runtime-token capabilities as typed MCP tools, plus the span-emission and guard hooks. Compiled `.claude/settings.json` registers the plugin's MCP server; raw hook-script HTTP glue remains the fallback for MCP-less runtimes, and the same MCP server is the template for post-V3 Cursor/Codex adapters. Landing: skeleton + span/heartbeat tools in Phase 0 (it *is* the integration recipe), full tool surface in Phase 2.
 
-**`surge` CLI** — `bind · compile · dispatch · abort · status · auth`; carries first-run session-token claim (INV-AUTH-5) and interactive token setup (INV-AUTH-4). Lands with Phase 0 (thin) and grows with the API.
+**`surge` CLI** — `bind · compile · dispatch · abort · retry · status · auth`; carries first-run session-token claim (INV-AUTH-5) and interactive token setup (INV-AUTH-4). Lands with Phase 0 (thin) and grows with the API.
 
 **Model provider registry — decided 2026-08-23 (design §23-Twenty-One).** Instance-level registry of custom model APIs: `anthropic` (default), `anthropic-compatible` (e.g. DeepSeek — base-URL/key env injection at worker spawn), `openai-compatible via proxy` (through a local translation proxy; not shipped in v1). All model references become provider-qualified; keys follow INV-AUTH-6; provider hosts surface on the capability report's egress line. Registry + injection + provider-qualified routing land in Phase 2, the settings card in Phase 3; per-provider cost normalization is post-V3.
 

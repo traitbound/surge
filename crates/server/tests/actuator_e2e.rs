@@ -705,3 +705,39 @@ async fn a_span_the_worker_never_closed_is_resolved_at_run_end() {
     assert!(open.policy_decision.as_deref().unwrap_or("").contains("never reported completion"),
         "the resolution says why, in the field that survives compaction (INV-OBS-2): {open:?}");
 }
+
+/// N2's other half: reconciling a run must not leave its issue a dead end.
+/// A failed issue can be put back in the eligible column and dispatched
+/// again — recovery is a product action, not a SQL edit.
+#[tokio::test]
+async fn a_failed_issue_can_be_retried_and_redispatched() {
+    let env = setup("#!/bin/sh\ncat >/dev/null\nexit 7\n").await; // fails
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let run_id = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+    let failed = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert_eq!(failed.status, surge_domain::board::OrchestrationStatus::Failed);
+    // A failed issue is not dispatchable...
+    assert!(matches!(
+        surge_server::supervisor::dispatch_issue(&env.state, "iss_1").await.unwrap(),
+        surge_server::supervisor::DispatchOutcome::Refused { .. }
+    ));
+    // ...until it is retried, which is an ordinary human action.
+    assert!(surge_store::issues::mark_eligible_again(&env.state.pool, "iss_1").await.unwrap());
+    let retried = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert_eq!(retried.status, surge_domain::board::OrchestrationStatus::Eligible);
+    assert_eq!(retried.retry_count, failed.retry_count + 1, "the count is on the card (§06)");
+    assert!(matches!(
+        surge_server::supervisor::dispatch_issue(&env.state, "iss_1").await.unwrap(),
+        surge_server::supervisor::DispatchOutcome::Spawned { .. }
+    ));
+    // Guard: verified and leased issues are never retryable.
+    surge_store::issues::release_lease(&env.state.pool, "iss_1", surge_domain::board::OrchestrationStatus::Verified)
+        .await
+        .unwrap();
+    assert!(!surge_store::issues::mark_eligible_again(&env.state.pool, "iss_1").await.unwrap());
+}
