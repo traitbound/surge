@@ -5,6 +5,17 @@
 //! into it → spawn one headless worker with the runtime token injected as env
 //! (INV-AUTH-4) → watch. Terminal state derives from exit codes and the lease
 //! clock only — never span content (INV-EXEC-3).
+//!
+//! Lease TTL is enforced from three places, deliberately: the per-run
+//! [`monitor`] (fast path, dies with the process), the standing
+//! [`spawn_lease_sweeper`] task (backstop for runs no monitor is watching),
+//! and [`reconcile_orphans`] at boot / [`drain_on_shutdown`] at Ctrl-C
+//! (nothing survives a process boundary as `running`). All three funnel
+//! through the same guarded terminalization, so they can race without
+//! double-writing (smoke walk 3, N2). Terminalizing also resolves the spans
+//! a worker opened and never closed: closing them is not a capability the
+//! runtime has (INV-AUTH-1), so the supervisor's own observation is what
+//! resolves them (N4-residual).
 
 use crate::{now_ms, AppState};
 use std::path::PathBuf;
@@ -28,13 +39,32 @@ pub struct SupervisorConfig {
     pub api_base: String,
     /// Where the Claude Code plugin lives; injected as SURGE_PLUGIN_DIR — the
     /// compiled .claude/mcp.json and settings.json hooks resolve against it.
+    /// It has no default: see [`SupervisorConfig::new`].
     pub plugin_dir: PathBuf,
     /// How often the watchdog looks at the lease clock and the child.
     pub poll_ms: u64,
+    /// How often the standing lease sweeper runs — and, doubling as its
+    /// grace, how far past expiry a lease must be before the sweeper touches
+    /// it, so a live [`monitor`] (polling `poll_ms`) always wins the race (N2).
+    pub sweep_ms: u64,
 }
 
-impl Default for SupervisorConfig {
-    fn default() -> Self {
+/// Deliberately not a path anything could half-work from: a spawn against it
+/// fails `plugin_assets::verify` by name, in the operator's face. The old
+/// cwd-relative default (`integrations/claude-plugin`) resolved to *nothing*
+/// outside the source checkout and Claude Code tolerated it silently — the
+/// NEW-1 P0 (smoke walk 3, N14 kept it disarmed).
+const UNCONFIGURED_PLUGIN_DIR: &str = "/nonexistent/surge-plugin-dir-not-configured";
+
+impl SupervisorConfig {
+    /// Every field but `plugin_dir` has a safe shipped default; `plugin_dir`
+    /// gets no default at all, because a *plausible* wrong value there is the
+    /// exact shape of the NEW-1 P0 — workers that start, find no MCP tools
+    /// and no hooks, and exit 0 having done nothing. `Default` is therefore
+    /// not implemented for this type: a future `..Default::default()` caller
+    /// cannot silently re-arm the guess, it fails to compile and has to say
+    /// where the plugin tree is (smoke walk 3, N14).
+    pub fn new(plugin_dir: PathBuf) -> Self {
         Self {
             worker_cmd: vec![
                 "claude".into(),
@@ -45,9 +75,17 @@ impl Default for SupervisorConfig {
             lease_ttl_ms: 10 * 60 * 1000,
             work_dir: PathBuf::from("surge-worktrees"),
             api_base: format!("http://{}", crate::BIND),
-            plugin_dir: PathBuf::from("integrations/claude-plugin"),
+            plugin_dir,
             poll_ms: 500,
+            sweep_ms: 5_000,
         }
+    }
+
+    /// A supervisor for surfaces that never dispatch (read-only API tests,
+    /// [`crate::AppState::new`]). Spelled out rather than defaulted: it
+    /// refuses at spawn instead of running a blind worker.
+    pub fn unconfigured() -> Self {
+        Self::new(PathBuf::from(UNCONFIGURED_PLUGIN_DIR))
     }
 }
 
@@ -92,9 +130,25 @@ async fn refusal_run(
         cost: 0.0,
     };
     surge_store::observatory::insert_run(&state.pool, &run).await?;
+    refusal_span(state, &run_id, reason, now).await?;
+    surge_store::audit::record(&state.pool, "dispatch.refused", reason, "human", Some(project_id), now)
+        .await?;
+    Ok(run_id)
+}
+
+/// The span that makes a refusal visible (INV-ERR-1, phase.md:43). Every
+/// refusal branch appends it — the lease-lost branch used to write a refusal
+/// run with no span at all, so the reason existed only in the HTTP response
+/// and the audit row (smoke walk 3, N6).
+async fn refusal_span(
+    state: &AppState,
+    run_id: &str,
+    reason: &str,
+    now: i64,
+) -> anyhow::Result<()> {
     surge_store::observatory::append_span(&state.pool, &Span {
         id: format!("sp_{run_id}"),
-        run_id: run_id.clone(),
+        run_id: run_id.to_string(),
         parent_span_id: None,
         node_id: None,
         role: SpanRole::Coordinator,
@@ -106,10 +160,7 @@ async fn refusal_run(
         policy_decision: Some(reason.into()),
         body: Some(reason.into()),
     })
-    .await?;
-    surge_store::audit::record(&state.pool, "dispatch.refused", reason, "human", Some(project_id), now)
-        .await?;
-    Ok(run_id)
+    .await
 }
 
 /// Dispatch one issue (phase 0: single-task, no queue). See module docs for
@@ -167,6 +218,8 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
         let reason = "dispatch refused — issue is not eligible or already leased";
         surge_store::observatory::finish_run_if_running(&state.pool, &run_id, RunStatus::Refused, now)
             .await?;
+        // Same visible record as every other refusal branch (N6).
+        refusal_span(state, &run_id, reason, now).await?;
         surge_store::audit::record(&state.pool, "dispatch.refused", reason, "human", Some(&project.id), now)
             .await?;
         return Ok(DispatchOutcome::Refused { run_id, reason: reason.into() });
@@ -185,14 +238,50 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
     let guard = match setup.await {
         Ok(g) => g,
         Err(e) => {
-            fail_dispatch(state, &run_id, &issue.id, None, &format!("worktree creation failed: {e}")).await;
+            fail_dispatch(
+                state,
+                &run_id,
+                &project.id,
+                Some(&issue.id),
+                None,
+                None,
+                &format!("worktree creation failed: {e}"),
+            )
+            .await;
+            return Err(e);
+        }
+    };
+
+    // The credential is minted before the fallible work below so the failure
+    // path can revoke it — an undelivered runtime token must not outlive the
+    // dispatch that needed it (INV-AUTH-4; smoke walk 3, N1).
+    let runtime_token = match surge_store::tokens::mint(
+        &state.pool,
+        surge_store::tokens::TokenKind::Runtime,
+        Some(&project.id),
+        now,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            fail_dispatch(
+                state,
+                &run_id,
+                &project.id,
+                Some(&issue.id),
+                Some(guard),
+                None,
+                &format!("runtime token mint failed: {e}"),
+            )
+            .await;
             return Err(e);
         }
     };
 
     // 5+6. Compile into the worktree, render the work order, spawn — any
     // failure past the lease claim must not leak the lease, the running run,
-    // or the worktree (smoke 2026-08-25, F4).
+    // the credential, or the worktree (smoke 2026-08-25, F4; smoke walk 3, N1).
     let spawned: anyhow::Result<(tokio::process::Child, StderrTail)> = async {
         let (pipeline, nodes, edges) =
             surge_store::pipelines::load_graph(&state.pool, &mat.pipeline_id).await?;
@@ -222,13 +311,6 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
         .await
         .ok(); // revision uniqueness: a redispatch reuses revision 1's content
 
-        let runtime_token = surge_store::tokens::mint(
-            &state.pool,
-            surge_store::tokens::TokenKind::Runtime,
-            Some(&project.id),
-            now,
-        )
-        .await?;
         // The work order arrives on stdin (see worker_cmd docs) with a
         // pointer at the surge MCP tools.
         let prompt = format!(
@@ -245,7 +327,16 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
     let (child, stderr_tail) = match spawned {
         Ok(cs) => cs,
         Err(e) => {
-            fail_dispatch(state, &run_id, &issue.id, Some(guard), &format!("worker spawn failed: {e}")).await;
+            fail_dispatch(
+                state,
+                &run_id,
+                &project.id,
+                Some(&issue.id),
+                Some(guard),
+                Some(&runtime_token),
+                &format!("worker spawn failed: {e}"),
+            )
+            .await;
             return Err(e);
         }
     };
@@ -256,6 +347,7 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
     tokio::spawn(monitor(
         state.clone(),
         run_id.clone(),
+        project.id.clone(),
         Some(issue.id.clone()),
         child,
         stderr_tail,
@@ -266,17 +358,27 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
 
 type StderrTail = tokio::sync::oneshot::Receiver<String>;
 
+/// What Surge writes onto a span a worker opened and never closed. The
+/// runtime has no close-span capability by design (INV-AUTH-1's five), so the
+/// only honest resolution is the supervisor's own observation that the run
+/// ended (INV-EXEC-3) — see `store::observatory::resolve_dangling_spans` for
+/// why the status becomes `error` rather than `ok` (smoke walk 3,
+/// N4-residual).
+const DANGLING_SPAN: &str =
+    "span never reported completion — resolved when the supervisor observed the run end";
+
 /// True when a run produced no spans of its own — the signature of a worker
 /// that never reached Surge (NEW-2). Supervisor-written spans (`sp_end_*`,
-/// `sp_fail_*`) are not the worker's. A store read failure returns false: a
-/// failed read must never manufacture a failure verdict.
+/// `sp_fail_*`, `sp_orphan_*`) are not the worker's. A store read failure
+/// returns false: a failed read must never manufacture a failure verdict.
 async fn unobserved(state: &AppState, run_id: &str) -> bool {
+    const SUPERVISOR_SPANS: [&str; 3] = ["sp_end_", "sp_fail_", "sp_orphan_"];
     surge_store::observatory::span_tree(&state.pool, run_id)
         .await
         .map(|spans| {
             !spans
                 .iter()
-                .any(|s| !s.id.starts_with("sp_end_") && !s.id.starts_with("sp_fail_"))
+                .any(|s| !SUPERVISOR_SPANS.iter().any(|p| s.id.starts_with(p)))
         })
         .unwrap_or(false)
 }
@@ -340,13 +442,24 @@ fn spawn_worker(
     Ok((child, rx))
 }
 
-/// The cleanup owed after a post-lease dispatch failure: run → failed with a
-/// reason span, lease released, worktree reaped. Nothing leaks.
+/// The cleanup owed after a dispatch failure past the run row: run → failed
+/// with a reason span, lease released, credential revoked, worktree reaped,
+/// audit written. Nothing leaks.
+///
+/// `issue_id` and `worktree` are `None` for a doc run (design §23-Fourteen):
+/// it holds no lease and runs in the bound repo itself. That path used to
+/// propagate spawn failure with `?` straight past this guard, leaving a
+/// permanently `running` run, a live orphaned runtime token and no
+/// `dispatch.failed` entry (smoke walk 3, N1). The audit row carries the
+/// project, like `run.dispatched` does, so one project's dispatch lifecycle
+/// is filterable end to end (N13).
 async fn fail_dispatch(
     state: &AppState,
     run_id: &str,
-    issue_id: &str,
+    project_id: &str,
+    issue_id: Option<&str>,
     worktree: Option<WorktreeGuard>,
+    runtime_token: Option<&str>,
     reason: &str,
 ) {
     let now = now_ms();
@@ -367,12 +480,24 @@ async fn fail_dispatch(
         body: Some(reason.to_string()),
     })
     .await;
-    let _ = surge_store::issues::release_lease(&state.pool, issue_id, OrchestrationStatus::Failed).await;
+    if let Some(issue_id) = issue_id {
+        release_if_held(state, issue_id, run_id, OrchestrationStatus::Failed).await;
+    }
+    if let Some(token) = runtime_token {
+        let _ = surge_store::tokens::revoke(&state.pool, token, now).await;
+    }
     if let Some(wt) = worktree {
         wt.reap();
     }
-    let _ = surge_store::audit::record(&state.pool, "dispatch.failed", reason, "supervisor", None, now)
-        .await;
+    let _ = surge_store::audit::record(
+        &state.pool,
+        "dispatch.failed",
+        reason,
+        "supervisor",
+        Some(project_id),
+        now,
+    )
+    .await;
 }
 
 pub struct WorktreeGuard {
@@ -409,6 +534,7 @@ fn git(repo: &str, args: &[&str]) -> anyhow::Result<()> {
 async fn monitor(
     state: AppState,
     run_id: String,
+    project_id: String,
     issue_id: Option<String>,
     mut child: tokio::process::Child,
     stderr_tail: StderrTail,
@@ -474,7 +600,8 @@ async fn monitor(
         (RunStatus::Succeeded, Some(_)) if unobserved(&state, &run_id).await => (
             RunStatus::Failed,
             Some(
-                "worker exited 0 but appended no spans and never heartbeated — it could not                  reach Surge (check plugin registration in the compiled .claude/)"
+                "worker exited 0 but appended no spans and never heartbeated — it could not \
+                 reach Surge (check plugin registration in the compiled .claude/)"
                     .to_string(),
             ),
         ),
@@ -487,7 +614,14 @@ async fn monitor(
     let final_status = if moved {
         status
     } else {
-        RunStatus::Aborted // the only guarded path a running run leaves early
+        // Someone else terminalized this run first: an abort landing in the
+        // ledger (§06-06), or the lease sweeper / a shutdown drain (N2).
+        // Read what actually happened rather than assuming — a stale guess
+        // here would write the issue a status the run never had.
+        surge_store::observatory::get_run(&state.pool, &run_id)
+            .await
+            .map(|r| r.status)
+            .unwrap_or(RunStatus::Aborted)
     };
     if let Some(reason) = &reason {
         let _ = surge_store::observatory::append_span(&state.pool, &Span {
@@ -506,13 +640,20 @@ async fn monitor(
         })
         .await;
     }
+    // The worker's own dangling spans are resolved from the same observed
+    // fact that ended the run (N4-residual): walk 3 found spans left
+    // `running` forever on runs that had already succeeded.
+    let _ = surge_store::observatory::resolve_dangling_spans(&state.pool, &run_id, DANGLING_SPAN)
+        .await;
     if let Some(issue_id) = &issue_id {
         let issue_status = match final_status {
             RunStatus::Succeeded => OrchestrationStatus::Verified,
             RunStatus::Aborted => OrchestrationStatus::Aborted,
             _ => OrchestrationStatus::Failed,
         };
-        let _ = surge_store::issues::release_lease(&state.pool, issue_id, issue_status).await;
+        // Only if this run still holds it: the sweeper may have reclaimed the
+        // lease already, and its verdict must not be overwritten (N2).
+        release_if_held(&state, issue_id, &run_id, issue_status).await;
     }
     if let Some(wt) = worktree {
         wt.reap();
@@ -522,10 +663,32 @@ async fn monitor(
         "run.finished",
         &format!("{run_id}:{}", final_status.as_str()),
         "supervisor",
-        None,
+        Some(&project_id),
         now,
     )
     .await;
+}
+
+/// End a lease only when it is still the named run's. Every lease writer in
+/// this module goes through here: monitor, sweeper and reconcile can all
+/// arrive at the same issue, and the loser must not restate a status the
+/// winner already decided (N2). Returns whether it released.
+async fn release_if_held(
+    state: &AppState,
+    issue_id: &str,
+    run_id: &str,
+    status: OrchestrationStatus,
+) -> bool {
+    let held = surge_store::issues::get(&state.pool, issue_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|i| i.lease)
+        .is_some_and(|l| l.run_id == run_id);
+    if held {
+        let _ = surge_store::issues::release_lease(&state.pool, issue_id, status).await;
+    }
+    held
 }
 
 /// Human-triggered doc run (design §23-Fourteen): same supervisor, no issue,
@@ -564,14 +727,262 @@ pub async fn dispatch_doc_run(state: &AppState, project_id: &str) -> anyhow::Res
     let cfg = &state.supervisor;
     let prompt = "Run the doc pipeline compiled into .claude/ for this project. Use the surge MCP \
                   tools as you work: surge_append_span for progress, surge_poll_run to check for aborts.\n";
-    let (child, stderr_tail) = spawn_worker(
+    // The run row exists and the credential is minted, so a spawn failure
+    // owes the same cleanup a work-order dispatch owes — issue-less variant.
+    // Propagating with `?` here leaked a permanently `running` run, a live
+    // runtime token and no `dispatch.failed` entry (smoke walk 3, N1).
+    let (child, stderr_tail) = match spawn_worker(
         cfg,
         std::path::Path::new(&project.repo_path),
         prompt,
         &[("SURGE_RUN_ID", run_id.as_str()), ("SURGE_RUNTIME_TOKEN", runtime_token.as_str())],
-    )?;
+    ) {
+        Ok(cs) => cs,
+        Err(e) => {
+            fail_dispatch(
+                state,
+                &run_id,
+                &project.id,
+                None,
+                None,
+                Some(&runtime_token),
+                &format!("worker spawn failed: {e}"),
+            )
+            .await;
+            return Err(e);
+        }
+    };
     surge_store::audit::record(&state.pool, "run.dispatched", &run_id, "human", Some(&project.id), now)
         .await?;
-    tokio::spawn(monitor(state.clone(), run_id.clone(), None, child, stderr_tail, None));
+    tokio::spawn(monitor(
+        state.clone(),
+        run_id.clone(),
+        project.id.clone(),
+        None,
+        child,
+        stderr_tail,
+        None,
+    ));
     Ok(run_id)
+}
+
+// ---------------------------------------------------------------------------
+// Lease enforcement that outlives a single `monitor` task (smoke walk 3, N2).
+//
+// Before this, TTL was enforced *only* inside the per-run monitor, which dies
+// with the process. SIGKILL the server mid-run and the wreckage was permanent:
+// run stuck `running`, issue stuck `leased`, worktree residue on disk, and
+// every later `surge dispatch <issue>` refused "not eligible or already
+// leased" — recoverable only by hand-editing SQLite. So: a fresh process owns
+// nothing it finds running, a standing sweeper enforces the clock whether or
+// not a monitor exists, and shutdown drains rather than abandons.
+// ---------------------------------------------------------------------------
+
+/// Terminalize one run this supervisor is not watching: run → Failed with a
+/// visible reason span (INV-ERR-1), the lease released if this run still
+/// holds it, its worktree reaped (INV-EXEC-2), one audit row carrying the
+/// project (INV-OBS-1, N13). The status transition is guarded, so concurrent
+/// callers — and repeat passes — cannot double-write: only the caller that
+/// actually moved the run writes the span and returns true.
+async fn terminalize_orphan(state: &AppState, run: &Run, reason: &str) -> bool {
+    let now = now_ms();
+    let moved =
+        surge_store::observatory::finish_run_if_running(&state.pool, &run.id, RunStatus::Failed, now)
+            .await
+            .unwrap_or(false);
+    if !moved {
+        return false;
+    }
+    let _ = surge_store::observatory::append_span(&state.pool, &Span {
+        id: format!("sp_orphan_{}", run.id),
+        run_id: run.id.clone(),
+        parent_span_id: None,
+        node_id: None,
+        role: SpanRole::Coordinator,
+        started_at: now,
+        duration_ms: Some(0),
+        status: SpanStatus::Error,
+        cost: 0.0,
+        depth: 0,
+        policy_decision: Some(reason.to_string()),
+        body: Some(reason.to_string()),
+    })
+    .await;
+    // A run terminalized here has the same dangling-span problem a monitored
+    // one does — more so, since its worker is gone (N4-residual).
+    let _ = surge_store::observatory::resolve_dangling_spans(&state.pool, &run.id, DANGLING_SPAN)
+        .await;
+    if let Some(issue_id) = &run.issue_id {
+        let held = release_if_held(state, issue_id, &run.id, OrchestrationStatus::Failed).await;
+        // Reap only what this run can still own: if some *other* run holds
+        // the lease now, the worktree under that issue is that run's, live.
+        let taken_over = !held
+            && surge_store::issues::get(&state.pool, issue_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|i| i.lease)
+                .is_some();
+        if !taken_over {
+            reap_orphan_worktree(state, &run.project_id, issue_id).await;
+        }
+    }
+    let _ = surge_store::audit::record(
+        &state.pool,
+        "run.reconciled",
+        &format!("{}:{}", run.id, RunStatus::Failed.as_str()),
+        "supervisor",
+        Some(&run.project_id),
+        now,
+    )
+    .await;
+    true
+}
+
+/// Reap a worktree with no live [`WorktreeGuard`] behind it. Reconcile and
+/// the sweeper have to identify the directory by convention — INV-EXEC-2 is
+/// one worktree per lease, and dispatch always puts it at
+/// `<work_dir>/<project>/<issue>`. Absent is not an error: this is cleanup,
+/// not a check.
+async fn reap_orphan_worktree(state: &AppState, project_id: &str, issue_id: &str) {
+    let Ok(work_root) = absolutize(&state.supervisor.work_dir) else {
+        return;
+    };
+    let dir = work_root.join(project_id).join(issue_id);
+    if !dir.exists() {
+        return;
+    }
+    let Ok(Some(project)) = surge_store::projects::get(&state.pool, project_id).await else {
+        eprintln!("worktree {dir:?} left in place: project {project_id} is gone");
+        return;
+    };
+    WorktreeGuard { repo: project.repo_path.into(), dir }.reap();
+}
+
+/// Terminalize every run still marked `running`, with one reason. Shared by
+/// boot reconcile and the shutdown drain; idempotent by construction — the
+/// transition is guarded and the query only returns runs still running.
+async fn terminalize_all_running(state: &AppState, reason: &str) -> anyhow::Result<usize> {
+    let runs = surge_store::observatory::running_runs(&state.pool).await?;
+    let mut n = 0;
+    for run in &runs {
+        if terminalize_orphan(state, run, reason).await {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// Boot-time reconciliation, called before the server starts serving: a fresh
+/// process owns none of the runs it finds `running`, because whatever was
+/// watching them is gone. Each becomes a visible failure, its lease is
+/// released and its worktree reaped — so the operator's next dispatch is
+/// refused for a reason that is true, or not refused at all (N2).
+///
+/// The issue lands `failed`, not back in `eligible`: a supervisor that died
+/// is no evidence the work is safe to redo, and re-queue policy (retry
+/// counts, waves) is Phase 2's. What this owes is coherent, visible state —
+/// not a guess about the work.
+///
+/// Takes [`AppState`] rather than the pool alone: identifying a worktree
+/// needs the supervisor's `work_dir`, and the reap needs the project's repo.
+pub async fn reconcile_orphans(state: &AppState) -> anyhow::Result<usize> {
+    terminalize_all_running(
+        state,
+        "supervisor restarted while this run was in flight — the worker it was watching is \
+         unreachable, so the run is failed and the lease released (INV-ERR-1)",
+    )
+    .await
+}
+
+/// Shutdown drain: give live monitors a grace period to terminalize their own
+/// runs, then reconcile whatever is left. A plain Ctrl-C thereby lands in the
+/// same clean state a crash-plus-restart does, instead of leaving the N2
+/// wreckage for the next boot to find.
+pub async fn drain_on_shutdown(state: &AppState, grace: std::time::Duration) -> usize {
+    let deadline = tokio::time::Instant::now() + grace;
+    loop {
+        match surge_store::observatory::running_runs(&state.pool).await {
+            Ok(runs) if runs.is_empty() => return 0,
+            Err(_) => break,
+            _ => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    terminalize_all_running(
+        state,
+        "supervisor shut down while this run was in flight — the run is failed and the lease \
+         released rather than left held by a process that no longer exists (INV-ERR-1)",
+    )
+    .await
+    .unwrap_or(0)
+}
+
+/// One pass of the standing lease sweeper: reclaim every lease whose clock
+/// ran out with no monitor to notice. The per-run monitor is the fast path
+/// (it polls `poll_ms` and can kill its child); the sweeper deliberately
+/// waits a full `sweep_ms` past expiry so a live monitor wins the race, and
+/// exists for the leases no monitor is watching at all. Returns how many it
+/// reclaimed.
+pub async fn sweep_expired_leases(state: &AppState) -> usize {
+    let cfg = &state.supervisor;
+    let grace = cfg.sweep_ms as i64;
+    let now = now_ms();
+    let Ok(leases) = surge_store::issues::held_leases(&state.pool).await else {
+        return 0;
+    };
+    let mut n = 0;
+    for lease in leases {
+        if now <= lease.expires_at + grace {
+            continue;
+        }
+        let reason = format!(
+            "lease reclaimed by the sweeper — no heartbeat within TTL ({}ms) and no live monitor \
+             held this run (INV-ERR-1)",
+            cfg.lease_ttl_ms
+        );
+        let run = surge_store::observatory::get_run(&state.pool, &lease.run_id).await.ok();
+        let swept = match &run {
+            Some(run) => terminalize_orphan(state, run, &reason).await,
+            None => false,
+        };
+        if swept {
+            n += 1;
+            continue;
+        }
+        // The run was already terminal but the lease outlived it — the half
+        // of N2 that left an issue permanently undispatchable.
+        if release_if_held(state, &lease.issue_id, &lease.run_id, OrchestrationStatus::Failed).await {
+            reap_orphan_worktree(state, &lease.project_id, &lease.issue_id).await;
+            let _ = surge_store::audit::record(
+                &state.pool,
+                "lease.reclaimed",
+                &format!("{}:{}", lease.issue_id, lease.run_id),
+                "supervisor",
+                Some(&lease.project_id),
+                now,
+            )
+            .await;
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Start the sweeper. One task per process, independent of any dispatch, so
+/// TTL enforcement exists even when no `monitor` does (N2). It owns no child
+/// processes: an expired lease whose worker is somehow still alive is
+/// reclaimed in the store, and the worker's own abort poll (§06-06) is what
+/// stops it.
+pub fn spawn_lease_sweeper(state: AppState) -> tokio::task::JoinHandle<()> {
+    let period = std::time::Duration::from_millis(state.supervisor.sweep_ms.max(1));
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(period).await;
+            sweep_expired_leases(&state).await;
+        }
+    })
 }

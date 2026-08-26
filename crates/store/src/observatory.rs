@@ -139,6 +139,34 @@ pub async fn list_runs(pool: &SqlitePool, project_id: Option<&str>) -> anyhow::R
         .collect())
 }
 
+/// Runs still marked `running` — what a fresh process sees of the runs the
+/// previous one was watching when it died. The supervisor's boot reconcile
+/// owns none of them (smoke walk 3, N2).
+pub async fn running_runs(pool: &SqlitePool) -> anyhow::Result<Vec<Run>> {
+    let rows = sqlx::query!(
+        "SELECT id, project_id, issue_id, kind, materialization_hash,
+                work_order_hash, status, started_at, ended_at, cost
+         FROM run WHERE status = 'running' ORDER BY started_at"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Run {
+            id: r.id,
+            project_id: r.project_id,
+            issue_id: r.issue_id,
+            kind: parse_run_kind(&r.kind),
+            materialization_hash: r.materialization_hash,
+            work_order_hash: r.work_order_hash,
+            status: parse_run_status(&r.status),
+            started_at: r.started_at,
+            ended_at: r.ended_at,
+            cost: r.cost,
+        })
+        .collect())
+}
+
 /// The run's span tree in depth-first order: children under their parent,
 /// siblings by start time. The Observatory's waterfall reads this directly.
 pub async fn span_tree(pool: &SqlitePool, run_id: &str) -> anyhow::Result<Vec<Span>> {
@@ -199,6 +227,39 @@ pub async fn finish_run_if_running(
     .execute(pool)
     .await?;
     Ok(res.rows_affected() == 1)
+}
+
+/// Resolve every span still `running` on a run the supervisor has just
+/// observed end (smoke walk 3, N4-residual). A worker can open a span and
+/// never close it — the tool schema permits `status: "running"` — and Surge
+/// cannot ask it what happened afterwards: the runtime token's five
+/// capabilities (INV-AUTH-1) deliberately include no close-span call, and
+/// widening them would let the supervised side mutate what Surge recorded
+/// (INV-EXEC-3). So the resolution comes from the Surge-observed fact that
+/// the run ended.
+///
+/// `error`, not `ok`: the span genuinely never reported completion, and `ok`
+/// would claim an outcome nobody recorded — while `refused` means Surge
+/// declined something, which is not what happened. (A distinct
+/// `unresolved` status would read better still, but SpanStatus is a
+/// ts-rs-exported enum with a schema CHECK and UI rendering behind it;
+/// that is a wider change than this finding.) The reason lands in the policy
+/// field, which survives compaction (INV-OBS-2), and the worker's body and
+/// timings are left exactly as it wrote them.
+pub async fn resolve_dangling_spans(
+    pool: &SqlitePool,
+    run_id: &str,
+    reason: &str,
+) -> anyhow::Result<u64> {
+    let res = sqlx::query!(
+        "UPDATE span SET status = 'error', policy_decision = ?
+         WHERE run_id = ? AND status = 'running'",
+        reason,
+        run_id
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
 }
 
 /// The abort ledger write (§06): takes effect at the executor's next status

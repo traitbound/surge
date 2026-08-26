@@ -54,15 +54,21 @@ async fn setup(worker_script: &str) -> Env {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let api_base = format!("http://{}", listener.local_addr().unwrap());
+    // A real extracted plugin tree: spawning verifies it (NEW-1), and it is a
+    // constructor argument because the field has no default (N14) — there is
+    // no `Default` to spread from, only `new`.
+    let plugin_dir =
+        surge_server::plugin_assets::extract_beside_db(&work.path().join("x.db")).unwrap();
     let cfg = SupervisorConfig {
         worker_cmd: vec!["/bin/sh".into(), script.to_string_lossy().into_owned()],
         lease_ttl_ms: 120_000,
         work_dir: work.path().join("worktrees"),
         api_base: api_base.clone(),
-        // A real extracted plugin tree: spawning now verifies it (NEW-1).
-        plugin_dir: surge_server::plugin_assets::extract_beside_db(&work.path().join("x.db"))
-            .unwrap(),
         poll_ms: 50,
+        // No sweeper runs in this fixture unless a test starts one; the grace
+        // is parked far away so it can never race a monitor under test.
+        sweep_ms: 600_000,
+        ..SupervisorConfig::new(plugin_dir)
     };
     let state = AppState::with_supervisor(pool.clone(), cfg);
     let router = app(state.clone());
@@ -458,4 +464,244 @@ async fn clean_exit_without_spans_is_not_verified() {
     let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
     assert!(spans.iter().any(|s| s.body.as_deref().unwrap_or("").contains("could not \\
                  reach Surge") || s.body.as_deref().unwrap_or("").contains("appended no spans")));
+}
+
+/// N6 regression: the lease-lost refusal is a visible record like every other
+/// refusal — phase.md:43 promises a refusal run whose span carries the reason
+/// (INV-ERR-1). This branch used to write the run and no span at all, so the
+/// reason existed only in the HTTP response.
+#[tokio::test]
+async fn already_leased_refusal_carries_its_reason_span() {
+    let env = setup("#!/bin/sh\nexit 0\n").await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    // Someone else holds it already (an interactive session claimed it, §06).
+    assert!(surge_store::issues::claim_lease(
+        &env.state.pool, &issue.id, "someone-else", "run_elsewhere", 1, 60_000)
+        .await.unwrap());
+
+    let (run_id, reason) = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Refused { run_id, reason } => (run_id, reason),
+        _ => panic!("expected refusal"),
+    };
+    assert!(reason.contains("not eligible or already leased"));
+    let run = surge_store::observatory::get_run(&env.state.pool, &run_id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Refused);
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert_eq!(spans.len(), 1, "the refusal run carries one span with the reason (N6)");
+    assert!(spans[0].body.as_deref().unwrap().contains("already leased"), "{spans:?}");
+    // The holder's lease is untouched by the refusal.
+    let issue = surge_store::issues::get(&env.state.pool, &issue.id).await.unwrap().unwrap();
+    assert_eq!(issue.lease.unwrap().run_id, "run_elsewhere");
+}
+
+/// N1 regression: a doc run (no issue, no lease, no worktree — design
+/// §23-Fourteen) whose spawn fails goes through the same cleanup guard a
+/// work-order dispatch does. It used to propagate with `?` after inserting
+/// the run row, leaving a permanently `running` run and no audit entry.
+#[tokio::test]
+async fn failed_doc_run_spawn_leaves_no_running_run() {
+    let env = setup("#!/bin/sh\nexit 0\n").await;
+    compile(&env).await;
+    let mut cfg = (*env.state.supervisor).clone();
+    cfg.worker_cmd = vec!["/nonexistent-worker-binary".into()];
+    let state = AppState::with_supervisor(env.state.pool.clone(), cfg);
+
+    let err = surge_server::supervisor::dispatch_doc_run(&state, "prj_fix").await.unwrap_err();
+    assert!(!err.to_string().is_empty());
+
+    let runs = surge_store::observatory::list_runs(&env.state.pool, Some("prj_fix")).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, RunStatus::Failed, "no run left `running` (N1)");
+    assert!(runs[0].ended_at.is_some());
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &runs[0].id).await.unwrap();
+    assert!(spans.iter().any(|s| s.body.as_deref().unwrap_or("").contains("worker spawn failed")),
+        "the failure reason is a visible record (INV-ERR-1): {spans:?}");
+    let audit = surge_store::audit::recent(&env.state.pool, 50).await.unwrap();
+    assert!(audit.iter().any(|a| a.action == "dispatch.failed"
+        && a.project_id.as_deref() == Some("prj_fix")),
+        "dispatch.failed audited, carrying the project (N1, N13): {audit:?}");
+}
+
+/// The wreckage a SIGKILL used to leave: a `running` run, a held lease and a
+/// worktree, all owned by a process that no longer exists.
+async fn orphan_from_a_dead_process(env: &Env, run_id: &str, ttl_ms: i64) {
+    let issue = create_issue(env).await;
+    let mat = surge_store::materializations::fresh_for_project(&env.state.pool, "prj_fix")
+        .await.unwrap().unwrap();
+    surge_store::observatory::insert_run(&env.state.pool, &surge_domain::observatory::Run {
+        id: run_id.into(),
+        project_id: "prj_fix".into(),
+        issue_id: Some(issue.id.clone()),
+        kind: surge_domain::observatory::RunKind::WorkOrder,
+        materialization_hash: mat.content_hash.clone(),
+        work_order_hash: Some(issue.work_order_hash.clone()),
+        status: RunStatus::Running,
+        started_at: 1,
+        ended_at: None,
+        cost: 0.0,
+    }).await.unwrap();
+    // …including a span the worker opened and never closed (N4-residual).
+    surge_store::observatory::append_span(&env.state.pool, &surge_domain::observatory::Span {
+        id: format!("sp_open_{run_id}"),
+        run_id: run_id.into(),
+        parent_span_id: None,
+        node_id: None,
+        role: surge_domain::observatory::SpanRole::Worker,
+        started_at: 1,
+        duration_ms: None,
+        status: surge_domain::observatory::SpanStatus::Running,
+        cost: 0.0,
+        depth: 0,
+        policy_decision: None,
+        body: Some("started the work".into()),
+    }).await.unwrap();
+    assert!(surge_store::issues::claim_lease(
+        &env.state.pool, &issue.id, "worker-1", run_id, 1, ttl_ms).await.unwrap());
+    // The worktree residue, created exactly where dispatch puts it.
+    let wt = worktree_dir(env);
+    std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+    let out = std::process::Command::new("git")
+        .arg("-C").arg(env.repo.path())
+        .args(["worktree", "add", "-B", "task/iss_1", wt.to_str().unwrap()])
+        .output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// N2 regression (boot half): lease TTL used to be enforced only inside the
+/// per-run monitor, which dies with the process — a SIGKILL mid-run left the
+/// run `running` forever, the issue `leased`, the worktree on disk, and every
+/// later dispatch refused, recoverable only by editing SQLite. A fresh
+/// process now owns nothing it finds running.
+#[tokio::test]
+async fn boot_reconcile_terminalizes_orphaned_runs() {
+    let env = setup("#!/bin/sh\nexit 0\n").await;
+    compile(&env).await;
+    orphan_from_a_dead_process(&env, "run_orphan", 600_000).await;
+
+    assert_eq!(surge_server::supervisor::reconcile_orphans(&env.state).await.unwrap(), 1);
+
+    let run = surge_store::observatory::get_run(&env.state.pool, "run_orphan").await.unwrap();
+    assert_eq!(run.status, RunStatus::Failed, "terminalized, not left running (N2)");
+    assert!(run.ended_at.is_some());
+    let spans = surge_store::observatory::span_tree(&env.state.pool, "run_orphan").await.unwrap();
+    assert!(spans.iter().any(|s| s.body.as_deref().unwrap_or("")
+        .contains("supervisor restarted while this run was in flight")),
+        "the reason is a visible record (INV-ERR-1): {spans:?}");
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert!(issue.lease.is_none(), "lease released — the issue is not stuck `leased` (N2)");
+    assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Failed);
+    assert!(!worktree_dir(&env).exists(), "worktree residue reaped (INV-EXEC-2)");
+    let audit = surge_store::audit::recent(&env.state.pool, 50).await.unwrap();
+    assert!(audit.iter().any(|a| a.action == "run.reconciled"
+        && a.project_id.as_deref() == Some("prj_fix")), "{audit:?}");
+    // The worker's dangling span is resolved too (N4-residual): its worker is
+    // gone, so nothing will ever close it.
+    let open = spans.iter().find(|s| s.id == "sp_open_run_orphan").expect("worker span kept");
+    assert_ne!(open.status, surge_domain::observatory::SpanStatus::Running);
+    assert!(open.policy_decision.as_deref().unwrap_or("").contains("never reported completion"));
+    assert_eq!(open.body.as_deref(), Some("started the work"), "the worker's own record is kept");
+
+    // Idempotent: a second boot — or the shutdown drain — adds nothing.
+    assert_eq!(surge_server::supervisor::reconcile_orphans(&env.state).await.unwrap(), 0);
+    assert_eq!(surge_server::supervisor::drain_on_shutdown(
+        &env.state, Duration::from_millis(50)).await, 0);
+    let after = surge_store::observatory::span_tree(&env.state.pool, "run_orphan").await.unwrap();
+    assert_eq!(after.len(), spans.len(), "no second reason span");
+    assert_eq!(
+        surge_store::observatory::get_run(&env.state.pool, "run_orphan").await.unwrap().ended_at,
+        run.ended_at, "the first verdict stands");
+}
+
+/// N2 regression (sweeper half): TTL enforced with no monitor in existence at
+/// all — the case a per-run watchdog structurally cannot cover.
+#[tokio::test]
+async fn sweeper_reclaims_a_lease_no_monitor_is_watching() {
+    let env = setup("#!/bin/sh\nexit 0\n").await;
+    compile(&env).await;
+    // TTL 1ms from epoch: expired long before this test started.
+    orphan_from_a_dead_process(&env, "run_orphan", 1).await;
+    let mut cfg = (*env.state.supervisor).clone();
+    cfg.sweep_ms = 10; // also the grace a live monitor would win inside
+    let state = AppState::with_supervisor(env.state.pool.clone(), cfg);
+
+    assert_eq!(surge_server::supervisor::sweep_expired_leases(&state).await, 1);
+
+    let run = surge_store::observatory::get_run(&env.state.pool, "run_orphan").await.unwrap();
+    assert_eq!(run.status, RunStatus::Failed);
+    let spans = surge_store::observatory::span_tree(&env.state.pool, "run_orphan").await.unwrap();
+    assert!(spans.iter().any(|s| s.body.as_deref().unwrap_or("").contains("lease reclaimed by the sweeper")),
+        "{spans:?}");
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert!(issue.lease.is_none());
+    assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Failed);
+    assert!(!worktree_dir(&env).exists(), "worktree reaped (INV-EXEC-2)");
+    // Nothing left to sweep.
+    assert_eq!(surge_server::supervisor::sweep_expired_leases(&state).await, 0);
+}
+
+/// N2 regression: a lease that outlived its already-terminal run is reclaimed
+/// too — that combination is what made an issue permanently undispatchable
+/// ("not eligible or already leased", forever).
+#[tokio::test]
+async fn sweeper_releases_a_lease_whose_run_is_already_terminal() {
+    let env = setup("#!/bin/sh\nexit 0\n").await;
+    compile(&env).await;
+    orphan_from_a_dead_process(&env, "run_orphan", 1).await;
+    // The run reached a terminal state; only the lease was left behind.
+    assert!(surge_store::observatory::finish_run_if_running(
+        &env.state.pool, "run_orphan", RunStatus::Failed, 2).await.unwrap());
+    let mut cfg = (*env.state.supervisor).clone();
+    cfg.sweep_ms = 10;
+    let state = AppState::with_supervisor(env.state.pool.clone(), cfg);
+
+    assert_eq!(surge_server::supervisor::sweep_expired_leases(&state).await, 1);
+
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert!(issue.lease.is_none(), "the stranded lease is released (N2)");
+    assert!(!worktree_dir(&env).exists());
+    let audit = surge_store::audit::recent(&env.state.pool, 50).await.unwrap();
+    assert!(audit.iter().any(|a| a.action == "lease.reclaimed"
+        && a.project_id.as_deref() == Some("prj_fix")), "{audit:?}");
+}
+
+/// N4-residual regression, live: walk 3 found spans stuck `running` forever
+/// on runs that had already succeeded — a worker opened a "start" span the
+/// tool schema let it leave open, and nothing ever resolved it. Closing it is
+/// not a capability the runtime has (INV-AUTH-1's five, deliberately), so the
+/// supervisor resolves it from the exit it observed (INV-EXEC-3).
+#[tokio::test]
+async fn a_span_the_worker_never_closed_is_resolved_at_run_end() {
+    let env = setup(
+        "#!/bin/sh\n\
+         cat >/dev/null\n\
+         curl -sf -X POST \"$SURGE_API/runtime/runs/$SURGE_RUN_ID/spans\" \\\n\
+           -H \"Authorization: Bearer $SURGE_RUNTIME_TOKEN\" -H 'Content-Type: application/json' \\\n\
+           -d \"{\\\"id\\\":\\\"sp_open_$SURGE_RUN_ID\\\",\\\"run_id\\\":\\\"$SURGE_RUN_ID\\\",\\\"parent_span_id\\\":null,\\\"node_id\\\":null,\\\"role\\\":\\\"worker\\\",\\\"started_at\\\":1,\\\"duration_ms\\\":null,\\\"status\\\":\\\"running\\\",\\\"cost\\\":0.0,\\\"depth\\\":0,\\\"policy_decision\\\":null,\\\"body\\\":\\\"started the work\\\"}\" >/dev/null\n\
+         exit 0\n",
+    ).await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let run_id = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Succeeded);
+
+    // The lease release is the monitor's last write; wait for it so the span
+    // resolution that precedes it has certainly happened.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap().lease.is_some() {
+        assert!(std::time::Instant::now() < deadline, "lease never released");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert!(!spans.is_empty());
+    assert!(
+        !spans.iter().any(|s| s.status == surge_domain::observatory::SpanStatus::Running),
+        "no span is left running once the run is terminal (N4-residual): {spans:?}"
+    );
+    let open = spans.iter().find(|s| s.id == format!("sp_open_{run_id}")).expect("worker span");
+    assert!(open.policy_decision.as_deref().unwrap_or("").contains("never reported completion"),
+        "the resolution says why, in the field that survives compaction (INV-OBS-2): {open:?}");
 }

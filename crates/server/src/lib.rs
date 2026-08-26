@@ -23,8 +23,11 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// State with a supervisor that cannot dispatch: there is no safe default
+    /// for the plugin dir, so surfaces that never spawn say so explicitly
+    /// (smoke walk 3, N14).
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool, supervisor: std::sync::Arc::new(supervisor::SupervisorConfig::default()) }
+        Self { pool, supervisor: std::sync::Arc::new(supervisor::SupervisorConfig::unconfigured()) }
     }
 
     pub fn with_supervisor(pool: SqlitePool, cfg: supervisor::SupervisorConfig) -> Self {

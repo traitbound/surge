@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, project_id, lease_run_id, lease_expires_at\n         FROM issue WHERE lease_owner IS NOT NULL\n         ORDER BY lease_expires_at",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "project_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "name": "lease_run_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "lease_run_id"
+          }
+        }
+      },
+      {
+        "name": "lease_expires_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "issue",
+            "name": "lease_expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "f5323fb3233a01aa433cd0cfd1ff5723dcfa190a37ec8be691dde299c27d8ee7"
+}

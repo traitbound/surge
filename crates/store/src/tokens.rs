@@ -113,6 +113,22 @@ pub async fn has_active_session(pool: &SqlitePool) -> anyhow::Result<bool> {
     Ok(row.n > 0)
 }
 
+/// Revoke one token by its plaintext. Used when a credential is minted for a
+/// spawn that then fails: an undelivered runtime token must not outlive the
+/// dispatch that needed it (INV-AUTH-4; smoke walk 3, N1). Returns false if
+/// it was already unknown or revoked.
+pub async fn revoke(pool: &SqlitePool, plaintext: &str, now: i64) -> anyhow::Result<bool> {
+    let token_hash = hash(plaintext);
+    let res = sqlx::query!(
+        "UPDATE token SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL",
+        now,
+        token_hash
+    )
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected() == 1)
+}
+
 /// Revoke every active token of one kind (rotation; sign-everyone-out).
 pub async fn revoke_all(pool: &SqlitePool, kind: TokenKind, now: i64) -> anyhow::Result<u64> {
     let kind_s = kind.as_str();
