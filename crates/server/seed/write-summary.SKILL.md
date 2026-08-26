@@ -34,10 +34,11 @@ long paragraph. The whole document should read in under five minutes.
 
 ## Reporting
 
-Emit progress through the three surge MCP tools the compiled runtime
-registers for you — everything you need is here, and there is no
+Emit progress through the three surge MCP reporting tools the compiled
+runtime registers for you — everything you need is here, and there is no
 documentation file to go and read (the bound repo's read list is closed,
-INV-DATA-6):
+INV-DATA-6). (`surge_fetch_work_order` is also registered, but a doc run
+holds no issue and so has no work order to fetch — do not call it.)
 
 - `surge_append_span` — required `body`; optional `status` (`ok` · `error` ·
   `refused`, default `ok`), `role`, `node_id`, `duration_ms`, `cost`. Spans

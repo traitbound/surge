@@ -1,11 +1,15 @@
 #!/usr/bin/env node
-// Surge MCP server — phase 0 skeleton (ADR-8): span-append, heartbeat and
-// own-run status poll as typed tools. Zero dependencies: newline-delimited
-// JSON-RPC over stdio, global fetch (Node >= 18).
+// Surge MCP server (ADR-8): four of INV-AUTH-1's five runtime capabilities as
+// typed tools — fetch work order, heartbeat, append spans, poll own-run status.
+// Zero dependencies: newline-delimited JSON-RPC over stdio, global fetch
+// (Node >= 18).
 //
 // Configuration is spawn-time env, injected by the Surge supervisor
 // (INV-AUTH-4): SURGE_API, SURGE_RUN_ID, SURGE_ISSUE_ID, SURGE_RUNTIME_TOKEN.
-// The full five-tool surface (fetch work order, claim lease) lands in Phase 2.
+// The fifth capability — claim lease — has no tool here on purpose: leases are
+// claimed by human-launched interactive sessions, never by a spawned worker
+// (INV-EXEC-1), which is already holding the lease it was spawned for. Its tool
+// lands in Phase 2 with the interactive-session surface.
 
 import { createInterface } from "node:readline";
 
@@ -15,6 +19,12 @@ const ISSUE_ID = process.env.SURGE_ISSUE_ID;
 const TOKEN = process.env.SURGE_RUNTIME_TOKEN;
 
 const TOOLS = [
+  {
+    name: "surge_fetch_work_order",
+    description:
+      "Fetch the work order for the issue this session holds, with its lease and the materialization hash the run executes under (INV-ID-1). Call it first: it is the authoritative statement of the task. Scoped to this worker's own issue — no arguments, nothing else is reachable.",
+    inputSchema: { type: "object", properties: {} },
+  },
   {
     name: "surge_append_span",
     description:
@@ -63,6 +73,28 @@ async function call(path, opts = {}) {
 
 async function handleTool(name, args) {
   switch (name) {
+    case "surge_fetch_work_order": {
+      // Own-issue only: the id comes from spawn-time env, never from the
+      // model, so there is no argument through which another issue could be
+      // named. The server scopes the runtime token independently.
+      if (!ISSUE_ID) {
+        throw new Error(
+          "SURGE_ISSUE_ID not set — no issue in scope (doc run); doc runs carry no work order",
+        );
+      }
+      const wo = JSON.parse(await call(`/runtime/issues/${ISSUE_ID}/work-order`));
+      const lease = wo.lease
+        ? `${wo.lease.owner} (run ${wo.lease.run_id}, expires ${wo.lease.expires_at})`
+        : "none";
+      return [
+        `issue: ${wo.issue_id}`,
+        `work_order_hash: ${wo.work_order_hash}`,
+        `materialization_hash: ${wo.materialization_hash ?? "none — compile first (INV-ID-1)"}`,
+        `lease: ${lease}`,
+        "",
+        wo.work_order,
+      ].join("\n");
+    }
     case "surge_append_span": {
       if (!RUN_ID) throw new Error("SURGE_RUN_ID not set");
       const span = {

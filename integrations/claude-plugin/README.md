@@ -1,9 +1,27 @@
-# Surge Claude Code plugin (phase 0 skeleton — ADR-8)
+# Surge Claude Code plugin (phase 0 — ADR-8)
 
 The runtime integration recipe: an MCP server exposing the runtime-token
-capabilities as typed tools, plus the two runtime-side hooks. Phase 0 ships
-span-append, heartbeat and own-run status poll; fetch-work-order and
-claim-lease tools land in Phase 2 with the full surface.
+capabilities as typed tools, plus the two runtime-side hooks.
+
+## Tools
+
+Four of INV-AUTH-1's five runtime capabilities, in capability order:
+
+| Tool | Capability | Arguments |
+| --- | --- | --- |
+| `surge_fetch_work_order` | fetch work order / lease / materialization hash for `$SURGE_ISSUE_ID` | none |
+| `surge_append_span` | append spans (observability, never control flow — INV-EXEC-3) | `body` required |
+| `surge_heartbeat` | heartbeat the lease for `$SURGE_ISSUE_ID` | none |
+| `surge_poll_run` | poll own-run status, so an abort lands at the next tool call (§06) | none |
+
+Every tool is scoped by spawn-time env, never by a model-supplied id: the
+issue and run come from `SURGE_ISSUE_ID` / `SURGE_RUN_ID`, and the runtime
+token is scoped to its own project and run server-side as well.
+
+The fifth capability, **claim lease**, has no tool here on purpose. Leases are
+claimed by human-launched interactive sessions (INV-EXEC-1); a spawned worker
+is already holding the lease it was spawned for. Its tool lands in Phase 2
+alongside the interactive-session surface.
 
 ## How a supervised worker gets it
 

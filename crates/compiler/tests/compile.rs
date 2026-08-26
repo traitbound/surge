@@ -154,6 +154,19 @@ fn write_to_repo_lands_files_and_maintains_gitignore_block() {
     assert!(gi.contains(".claude/settings.json"));
     assert!(gi.contains("work_orders/"));
     assert!(!gi.contains("\nsurge.yaml"), "surge.yaml stays committed (INV-DATA-7)");
+
+    // INV-DATA-1's fifth write kind is the surge-managed BLOCK, not the file:
+    // outside the markers not a byte moves, on either side of them.
+    let with_tail = format!("{gi}\n# mine, after the block\n*.local\n");
+    std::fs::write(repo.path().join(".gitignore"), &with_tail).unwrap();
+    write_to_repo(repo.path(), &compiled).unwrap();
+    let gi = std::fs::read_to_string(repo.path().join(".gitignore")).unwrap();
+    assert!(gi.starts_with("target/\n"), "entries before the block survive a recompile");
+    assert!(
+        gi.contains("# mine, after the block\n*.local\n"),
+        "entries after the block survive a recompile: {gi}"
+    );
+    assert_eq!(gi.matches("# >>> surge-managed").count(), 1, "still one block");
 }
 
 /// INV-ID-2, the case the original test never built: a Block node's collapse

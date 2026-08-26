@@ -1,6 +1,8 @@
-//! Writing a compile into the bound repo — the INV-DATA-1 write path for two
-//! of the four kinds (compiled `.claude/` files, `surge.yaml`) plus the
-//! gitignore block INV-DATA-7 requires the compiler to maintain.
+//! Writing a compile into the bound repo — the INV-DATA-1 write path for three
+//! of the five kinds: compiled `.claude/` files, `surge.yaml`, and the
+//! surge-managed block inside the repo-root `.gitignore` that INV-DATA-7
+//! requires the compiler to maintain (enumerated as the fifth write kind
+//! 2026-08-26; outside the markers not a byte is touched).
 
 use crate::Compiled;
 use std::fs;
