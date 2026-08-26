@@ -1,0 +1,13 @@
+-- F1: a runtime credential minted through POST /api/projects/{id}/runtime-token
+-- carried no run binding, and therefore no lifecycle at all — `revoke_for_run`
+-- (WHERE run_id = ?) could never match it and no endpoint revoked it, so every
+-- call left another immortal credential behind. A walker used one, minted 17
+-- minutes earlier against a long-terminal run, to claim a brand-new lease
+-- (smoke walk 5, F1).
+--
+-- Run-bound tokens keep `expires_at` NULL: they die when the supervisor
+-- observes their worker exit (migration 0004), and an abort has to reach a
+-- live token at the worker's next status poll (§06-06), so a clock must never
+-- kill one early. The project token — the one a human mints to curl the
+-- runtime API — expires instead, because nothing else is watching it.
+ALTER TABLE token ADD COLUMN expires_at INTEGER;

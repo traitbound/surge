@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT kind, project_id, run_id, expires_at FROM token\n         WHERE token_hash = ? AND revoked_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "project_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "name": "run_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "token",
+            "name": "run_id"
+          }
+        }
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "token",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "68958de62ed03cf13e37cc8ad785a61a65dcb3a94b55189d519a567487eb3de8"
+}

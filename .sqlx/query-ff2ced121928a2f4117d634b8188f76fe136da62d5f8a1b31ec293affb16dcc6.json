@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE issue SET lease_heartbeat_at = ?1, lease_expires_at = ?2\n         WHERE id = ?3 AND lease_owner IS NOT NULL\n           AND (?4 IS NULL OR lease_run_id = ?4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "ff2ced121928a2f4117d634b8188f76fe136da62d5f8a1b31ec293affb16dcc6"
+}

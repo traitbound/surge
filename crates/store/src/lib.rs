@@ -330,6 +330,129 @@ mod object_model_tests {
         assert_eq!(crate::work_orders::latest_for_issue(&pool, "iss_absent").await.unwrap(), None);
     }
 
+    /// `claim_lease` is `role:critical` and its doc comment says "exactly one
+    /// claimant wins", but no test ever issued two CONCURRENT claims: every
+    /// existing one claims twice in sequence, which the `WHERE lease_owner IS
+    /// NULL` predicate would satisfy even if it were not atomic (store review
+    /// 2026-08-26, WARN). So: a real contention test — a file-backed pool
+    /// (the in-memory one is a single connection, which would serialize the
+    /// race away), N tasks released at once against one eligible issue.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_claims_have_exactly_one_winner() {
+        let dir = std::env::temp_dir().join(format!("surge-claim-race-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("race.db");
+        let pool = crate::open(&db).await.unwrap();
+        seed_project_and_pipeline(&pool).await;
+        seed_issue(&pool, "iss_race").await;
+
+        const CLAIMANTS: usize = 8;
+        // A shared start instant rather than a barrier: every task is parked
+        // until the same moment, then they all hit one issue at once.
+        let go = tokio::time::Instant::now() + std::time::Duration::from_millis(100);
+        let mut tasks = Vec::new();
+        for n in 0..CLAIMANTS {
+            let pool = pool.clone();
+            tasks.push(tokio::spawn(async move {
+                tokio::time::sleep_until(go).await;
+                crate::issues::claim_lease(
+                    &pool,
+                    "iss_race",
+                    &format!("worker-{n}"),
+                    &format!("run_{n}"),
+                    1_000,
+                    600_000,
+                )
+                .await
+                .unwrap()
+            }));
+        }
+        let mut won = 0;
+        for t in tasks {
+            if t.await.unwrap() {
+                won += 1;
+            }
+        }
+        assert_eq!(won, 1, "exactly one claimant wins (INV-EXEC-1)");
+
+        // And the store holds one coherent, all-or-nothing lease.
+        let lease = crate::issues::get(&pool, "iss_race").await.unwrap().unwrap().lease.unwrap();
+        assert!(lease.owner.starts_with("worker-"));
+        assert_eq!(lease.run_id, lease.owner.replace("worker-", "run_"));
+        assert_eq!(crate::issues::held_leases(&pool).await.unwrap().len(), 1);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The lease release is guarded on the run that holds it, like every
+    /// other lease write. Unguarded (`WHERE id = ?` plus a client-side
+    /// read-then-write in the supervisor) a stale releaser could null out a
+    /// NEWER run's live lease — a retry plus a redispatch landing in the
+    /// window between the read and the write (concurrency review 2026-08-26).
+    #[tokio::test]
+    async fn releasing_a_lease_only_works_for_the_run_that_holds_it() {
+        use surge_domain::board::OrchestrationStatus;
+        let pool = crate::open_in_memory().await.unwrap();
+        seed_project_and_pipeline(&pool).await;
+        seed_issue(&pool, "iss_1").await;
+        assert!(crate::issues::claim_lease(&pool, "iss_1", "w", "run_new", 1, 600_000)
+            .await
+            .unwrap());
+
+        // The stale releaser (an older run, or a sweeper that lost the race).
+        assert!(
+            !crate::issues::release_lease(&pool, "iss_1", "run_old", OrchestrationStatus::Failed)
+                .await
+                .unwrap()
+        );
+        let issue = crate::issues::get(&pool, "iss_1").await.unwrap().unwrap();
+        assert_eq!(issue.lease.unwrap().run_id, "run_new", "the live lease survived");
+        assert_eq!(issue.status, OrchestrationStatus::Leased, "and its status was not restated");
+
+        // The holder releases it.
+        assert!(
+            crate::issues::release_lease(&pool, "iss_1", "run_new", OrchestrationStatus::Verified)
+                .await
+                .unwrap()
+        );
+        let issue = crate::issues::get(&pool, "iss_1").await.unwrap().unwrap();
+        assert!(issue.lease.is_none());
+        assert_eq!(issue.status, OrchestrationStatus::Verified);
+    }
+
+    /// Same guard on the beat: a worker's heartbeat names its run, so it can
+    /// only extend its own lease — the store half of the heartbeat hijack fix
+    /// (auth review 2026-08-26). The interactive token passes `None` and
+    /// extends whatever lease is there.
+    #[tokio::test]
+    async fn a_heartbeat_naming_another_run_moves_no_clock() {
+        let pool = crate::open_in_memory().await.unwrap();
+        seed_project_and_pipeline(&pool).await;
+        seed_issue(&pool, "iss_1").await;
+        assert!(crate::issues::claim_lease(&pool, "iss_1", "w", "run_mine", 1, 1_000)
+            .await
+            .unwrap());
+
+        assert!(!crate::issues::heartbeat(&pool, "iss_1", Some("run_other"), 5_000, 1_000)
+            .await
+            .unwrap());
+        assert_eq!(
+            crate::issues::get(&pool, "iss_1").await.unwrap().unwrap().lease.unwrap().expires_at,
+            1_001,
+            "another run's beat never moved the clock"
+        );
+        assert!(crate::issues::heartbeat(&pool, "iss_1", Some("run_mine"), 5_000, 1_000)
+            .await
+            .unwrap());
+        assert_eq!(
+            crate::issues::get(&pool, "iss_1").await.unwrap().unwrap().lease.unwrap().expires_at,
+            6_000
+        );
+        // The unbound (interactive) caller has no run to be checked against.
+        assert!(crate::issues::heartbeat(&pool, "iss_1", None, 7_000, 1_000).await.unwrap());
+    }
+
     #[tokio::test]
     async fn audit_appends_and_reads_back() {
         let pool = crate::open_in_memory().await.unwrap();
