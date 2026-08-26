@@ -32,7 +32,19 @@ without re-reading all of it. The doc node declares where it lands (e.g.
 Plain prose, present tense, no marketing language. Prefer a short table to a
 long paragraph. The whole document should read in under five minutes.
 
-While working, emit progress via the surge MCP tools (`surge_append_span`,
-`surge_heartbeat`, `surge_poll_run`) as described in
-`integrations/claude-plugin/README.md`, so the run's span tree shows this
-step and an abort can land between phases.
+## Reporting
+
+Emit progress through the three surge MCP tools the compiled runtime
+registers for you — everything you need is here, and there is no
+documentation file to go and read (the bound repo's read list is closed,
+INV-DATA-6):
+
+- `surge_append_span` — required `body`; optional `status` (`ok` · `error` ·
+  `refused`, default `ok`), `role`, `node_id`, `duration_ms`, `cost`. Spans
+  are append-only — nothing closes or amends one — so append a finished span
+  after each step of the method above rather than opening one when a step
+  begins; a span left `running` never stops being `running`.
+- `surge_heartbeat` — no arguments; call it through long survey reads so the
+  lease clock does not mistake reading for silence.
+- `surge_poll_run` — no arguments; call it before each step so an abort can
+  land between phases.

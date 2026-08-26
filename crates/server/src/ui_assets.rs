@@ -2,7 +2,9 @@
 //! binary via rust-embed and served from `/` — one file to copy, no Node at
 //! runtime. Unknown paths fall back to index.html (SPA routing). The API,
 //! runtime, claim and health routes are registered before this fallback and
-//! always win.
+//! always win — and `/api` and `/runtime` carry their own JSON 404s, so an
+//! unknown path under either never reaches here and never answers
+//! `200 text/html` (walk-3 finding N11).
 //!
 //! `ui/dist/` is a build artefact: run `npm run build` in `ui/` before a
 //! release build. A dev tree without it still compiles (the directory holds a

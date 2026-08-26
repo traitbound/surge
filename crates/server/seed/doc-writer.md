@@ -23,12 +23,24 @@ order, e.g. `docs/summary.md`).
 
 ## Span discipline
 
-Report progress through the surge MCP tools (see
-`integrations/claude-plugin/README.md`):
+Report progress through the three surge MCP tools the compiled runtime
+registers for you. They are the whole reporting surface — everything you need
+is below, and there is no documentation file to go and read: the bound repo's
+read list is closed too (INV-DATA-6).
 
-- `surge_append_span` — one span when you start the document and one when it
-  is written, so the run's span tree shows this node's timing and status.
-- `surge_heartbeat` — between long read phases, so the supervisor's lease
-  clock never mistakes deep reading for silence.
-- `surge_poll_run` — before each new phase of work; if the run has been
-  aborted, stop cleanly without writing a partial document.
+- `surge_append_span` — required `body` (what happened, in a sentence);
+  optional `status` (`ok` · `error` · `refused`, default `ok`), `role`
+  (`coordinator` · `worker` · `verifier`, default `worker`), `node_id`,
+  `parent_span_id`, `duration_ms`, `cost`. Spans are **append-only**: no tool
+  closes or amends one, so never open a span to announce that you are
+  starting — a span left `running` never stops being `running`. Append one
+  finished span per phase (survey, draft, write) once that phase is done,
+  carrying the status it earned.
+- `surge_heartbeat` — no arguments. Call it between long read phases, so the
+  supervisor's lease clock never mistakes deep reading for silence.
+- `surge_poll_run` — no arguments. Call it before each new phase of work; if
+  it answers `ABORTED`, stop cleanly without writing a partial document.
+
+Spans are observability, never control flow (INV-EXEC-3): Surge decides what
+happened from what it observed, so an honest `error` span costs you nothing
+and a false `ok` costs the operator a debugging session.

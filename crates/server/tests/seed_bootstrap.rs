@@ -26,6 +26,13 @@ async fn seed_is_idempotent_across_boots() {
         assert_eq!(item.trust, TrustState::Local);
         assert!(item.body.contains(marker), "{name}: {}", item.body);
         assert!(item.body.contains("surge_append_span"), "{name} must teach span emission");
+        // Walk-3 N8: the instructions are self-contained. A worker's repo read
+        // list is closed (INV-DATA-6), so a seed body must never send it to a
+        // path that exists only in the Surge source tree.
+        assert!(
+            !item.body.contains("integrations/claude-plugin"),
+            "{name} points a worker outside the bound repo (INV-DATA-6)"
+        );
     }
     let created = surge_store::library::get(&pool, LibraryItemKind::Subagent, "doc-writer", 1)
         .await.unwrap().unwrap().created_at;
