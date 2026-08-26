@@ -39,7 +39,7 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 - `cargo build --workspace` — build everything (set `SQLX_OFFLINE=true` if no dev DB; CI/fresh clones work from committed `.sqlx/`)
 - `cargo test --workspace` — tests; the `surge-domain` test target also regenerates `ui/src/generated/` (ts-rs)
 - Schema-change loop: edit `crates/store/migrations/` → `sqlx migrate run --source crates/store/migrations` (with `DATABASE_URL=sqlite://$PWD/.dev.db`; `sqlx database create` once) → `cargo sqlx prepare --workspace -- --all-targets` → commit `.sqlx/` in the same change
-- `cargo run -p surge-server` — serve `127.0.0.1:7420` (`--db <path>`, default `surge.db`); serves the embedded UI from `/` — build `ui/` first (`npm run build`) or the page tells you to (assets embed at compile time, ADR-4)
+- `cargo run -p surge-server` — serve `127.0.0.1:7420` (`--db <path>`, default `surge.db`; `--plugin-dir <path>` to run a working plugin tree instead of the embedded copy); serves the embedded UI from `/` — build `ui/` first (`npm run build`) or the page tells you to (assets embed at compile time, ADR-4). The Claude Code plugin is embedded too and extracted to `<db-dir>/.surge/plugin/<version>` at boot, so `SURGE_PLUGIN_DIR` resolves from any cwd
 - `ui/`: `npm run dev` (proxies to :7420) · `npm run build` · `npm run typecheck`
 
 ## Conventions

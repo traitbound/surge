@@ -51,6 +51,7 @@ impl Default for SupervisorConfig {
     }
 }
 
+#[derive(Debug)]
 pub enum DispatchOutcome {
     /// The run id of the spawned worker's run.
     Spawned { run_id: String },
@@ -265,6 +266,21 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
 
 type StderrTail = tokio::sync::oneshot::Receiver<String>;
 
+/// True when a run produced no spans of its own — the signature of a worker
+/// that never reached Surge (NEW-2). Supervisor-written spans (`sp_end_*`,
+/// `sp_fail_*`) are not the worker's. A store read failure returns false: a
+/// failed read must never manufacture a failure verdict.
+async fn unobserved(state: &AppState, run_id: &str) -> bool {
+    surge_store::observatory::span_tree(&state.pool, run_id)
+        .await
+        .map(|spans| {
+            !spans
+                .iter()
+                .any(|s| !s.id.starts_with("sp_end_") && !s.id.starts_with("sp_fail_"))
+        })
+        .unwrap_or(false)
+}
+
 /// Spawn a worker: prompt on stdin, stderr tailed into a channel so a failed
 /// worker's actual error is a visible record, not a discarded pipe
 /// (smoke 2026-08-25, F4; INV-ERR-1).
@@ -275,6 +291,10 @@ fn spawn_worker(
     extra_env: &[(&str, &str)],
 ) -> anyhow::Result<(tokio::process::Child, StderrTail)> {
     let plugin_dir = absolutize(&cfg.plugin_dir)?;
+    // Fail loud, never spawn blind: without a real plugin tree the worker
+    // gets no MCP tools and no hooks, so it cannot append spans, heartbeat,
+    // or see an abort — and `claude -p` exits 0 regardless (NEW-1).
+    crate::plugin_assets::verify(&plugin_dir)?;
     let mut cmd = tokio::process::Command::new(&cfg.worker_cmd[0]);
     cmd.args(&cfg.worker_cmd[1..])
         .current_dir(dir)
@@ -444,6 +464,22 @@ async fn monitor(
     };
 
     let now = now_ms();
+    // Observability floor (NEW-2): a work-order run that exits 0 having
+    // produced no spans and never heartbeated did not do the work — it never
+    // reached Surge. Exit code alone would call that `verified` and flip the
+    // issue, which is indistinguishable from success with nothing behind it.
+    // Span count and heartbeat state are Surge-observed facts, so deriving
+    // from them is INV-EXEC-3-clean.
+    let (status, reason) = match (status, &issue_id) {
+        (RunStatus::Succeeded, Some(_)) if unobserved(&state, &run_id).await => (
+            RunStatus::Failed,
+            Some(
+                "worker exited 0 but appended no spans and never heartbeated — it could not                  reach Surge (check plugin registration in the compiled .claude/)"
+                    .to_string(),
+            ),
+        ),
+        (s, _) => (s, reason),
+    };
     // If an abort already landed, it stands (finish_run_if_running is guarded).
     let moved = surge_store::observatory::finish_run_if_running(&state.pool, &run_id, status, now)
         .await

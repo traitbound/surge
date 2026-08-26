@@ -32,14 +32,19 @@ async fn setup(worker_script: &str) -> Env {
         vec!["init", "-q", "-b", "main"],
         vec!["config", "user.email", "t@t"],
         vec!["config", "user.name", "t"],
+        // Hermetic: the developer's global commit.gpgsign must not reach the
+        // fixture — parallel signed commits exhaust gpg-agent and fail here.
+        vec!["config", "commit.gpgsign", "false"],
     ] {
         assert!(std::process::Command::new("git")
             .arg("-C").arg(repo.path()).args(&args).status().unwrap().success());
     }
     std::fs::write(repo.path().join("README.md"), "fixture\n").unwrap();
     for args in [vec!["add", "."], vec!["commit", "-qm", "init"]] {
-        assert!(std::process::Command::new("git")
-            .arg("-C").arg(repo.path()).args(&args).status().unwrap().success());
+        let out = std::process::Command::new("git")
+            .arg("-C").arg(repo.path()).args(&args).output().unwrap();
+        assert!(out.status.success(), "git {args:?} failed: {} {}",
+            String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     }
 
     // Worker: a script standing in for `claude -p` (the supervisor cares
@@ -54,7 +59,9 @@ async fn setup(worker_script: &str) -> Env {
         lease_ttl_ms: 120_000,
         work_dir: work.path().join("worktrees"),
         api_base: api_base.clone(),
-        plugin_dir: "integrations/claude-plugin".into(),
+        // A real extracted plugin tree: spawning now verifies it (NEW-1).
+        plugin_dir: surge_server::plugin_assets::extract_beside_db(&work.path().join("x.db"))
+            .unwrap(),
         poll_ms: 50,
     };
     let state = AppState::with_supervisor(pool.clone(), cfg);
@@ -167,6 +174,9 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
          test -f .claude/settings.json && echo compiled >> \"$OUT\"\n\
          test -f \"work_orders/$SURGE_ISSUE_ID.md\" && echo workorder >> \"$OUT\"\n\
          git rev-parse --abbrev-ref HEAD >> \"$OUT\"\n\
+         curl -sf -X POST \"$SURGE_API/runtime/runs/$SURGE_RUN_ID/spans\" \\\n\
+           -H \"Authorization: Bearer $SURGE_RUNTIME_TOKEN\" -H 'Content-Type: application/json' \\\n\
+           -d \"{\\\"id\\\":\\\"sp_w_$SURGE_RUN_ID\\\",\\\"run_id\\\":\\\"$SURGE_RUN_ID\\\",\\\"parent_span_id\\\":null,\\\"node_id\\\":null,\\\"role\\\":\\\"worker\\\",\\\"started_at\\\":1,\\\"duration_ms\\\":1,\\\"status\\\":\\\"ok\\\",\\\"cost\\\":0.0,\\\"depth\\\":0,\\\"policy_decision\\\":null,\\\"body\\\":\\\"worked\\\"}\" >/dev/null\n\
          exit 0\n",
     ).await;
     compile(&env).await;
@@ -328,12 +338,17 @@ async fn reqwest_lite(url: &str, token: &str, post: bool) -> (u16, String) {
     (code.trim().parse().unwrap(), body.to_string())
 }
 
+/// What the real plugin's MCP tool does, in shell: one worker span.
+const SPAN_CURL: &str = "curl -sf -X POST \"$SURGE_API/runtime/runs/$SURGE_RUN_ID/spans\" \
+ -H \"Authorization: Bearer $SURGE_RUNTIME_TOKEN\" -H 'Content-Type: application/json' \
+ -d \"{\\\"id\\\":\\\"sp_w_$SURGE_RUN_ID\\\",\\\"run_id\\\":\\\"$SURGE_RUN_ID\\\",\\\"parent_span_id\\\":null,\\\"node_id\\\":null,\\\"role\\\":\\\"worker\\\",\\\"started_at\\\":1,\\\"duration_ms\\\":1,\\\"status\\\":\\\"ok\\\",\\\"cost\\\":0.0,\\\"depth\\\":0,\\\"policy_decision\\\":null,\\\"body\\\":\\\"worked\\\"}\" >/dev/null\n";
+
 /// F1 regression: a RELATIVE work_dir (the shipped default's shape) must
 /// resolve against the server's cwd — never against the bound repo — and
 /// dispatch must work with the server's cwd nowhere near the repo.
 #[tokio::test]
 async fn relative_work_dir_resolves_outside_the_bound_repo() {
-    let env = setup("#!/bin/sh\ncat >/dev/null\nexit 0\n").await;
+    let env = setup(&format!("#!/bin/sh\ncat >/dev/null\n{}exit 0\n", SPAN_CURL)).await;
     compile(&env).await;
     let issue = create_issue(&env).await;
     let rel = format!("tmp-e2e-worktrees-{}", std::process::id());
@@ -403,4 +418,44 @@ async fn worker_stderr_tail_is_a_visible_record() {
         assert!(std::time::Instant::now() < deadline, "stderr tail never landed in a span: {spans:?}");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// NEW-1 regression: a plugin dir without its MCP entry point must refuse the
+/// spawn — a worker with no tools and no hooks runs blind, and `claude -p`
+/// exits 0 regardless, which would report `verified` with nothing behind it.
+#[tokio::test]
+async fn missing_plugin_tree_refuses_the_spawn() {
+    let env = setup("#!/bin/sh\nexit 0\n").await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let empty = tempfile::tempdir().unwrap();
+    let mut cfg = (*env.state.supervisor).clone();
+    cfg.plugin_dir = empty.path().to_path_buf();
+    let state = AppState::with_supervisor(env.state.pool.clone(), cfg);
+
+    let err = surge_server::supervisor::dispatch_issue(&state, &issue.id).await.unwrap_err();
+    assert!(err.to_string().contains("mcp/server.mjs"), "names the missing entry: {err}");
+    // And it cleans up exactly like any other post-lease failure (F4).
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert!(issue.lease.is_none());
+    assert!(!worktree_dir(&env).exists());
+}
+
+/// NEW-2 regression: exit 0 with no worker spans is not success — the worker
+/// never reached Surge, and calling that `verified` hides it.
+#[tokio::test]
+async fn clean_exit_without_spans_is_not_verified() {
+    let env = setup("#!/bin/sh\ncat >/dev/null\nexit 0\n").await; // never appends a span
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let run_id = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Failed);
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert!(spans.iter().any(|s| s.body.as_deref().unwrap_or("").contains("could not \\
+                 reach Surge") || s.body.as_deref().unwrap_or("").contains("appended no spans")));
 }
