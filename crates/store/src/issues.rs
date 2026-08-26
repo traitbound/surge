@@ -111,19 +111,30 @@ pub async fn claim_lease(
 }
 
 /// Heartbeat: refresh the lease clock (§06 — expiry follows the last beat).
+///
+/// `run_id` is the run the caller claims to be: `Some` for a supervisor-spawned
+/// worker, whose token names its run, and the beat then lands only on its own
+/// lease. Refreshing someone else's lease forever is the heartbeat hijack
+/// (auth review 2026-08-26) — the API refuses it before it gets here, and
+/// this condition closes the window between that check and this write.
+/// `None` is the interactive/project token, which has no run to be checked
+/// against.
 pub async fn heartbeat(
     pool: &SqlitePool,
     issue_id: &str,
+    run_id: Option<&str>,
     now: i64,
     ttl_ms: i64,
 ) -> anyhow::Result<bool> {
     let expires = now + ttl_ms;
     let res = sqlx::query!(
-        "UPDATE issue SET lease_heartbeat_at = ?, lease_expires_at = ?
-         WHERE id = ? AND lease_owner IS NOT NULL",
+        "UPDATE issue SET lease_heartbeat_at = ?1, lease_expires_at = ?2
+         WHERE id = ?3 AND lease_owner IS NOT NULL
+           AND (?4 IS NULL OR lease_run_id = ?4)",
         now,
         expires,
-        issue_id
+        issue_id,
+        run_id
     )
     .execute(pool)
     .await?;
@@ -132,22 +143,32 @@ pub async fn heartbeat(
 
 /// End the lease and record the terminal status derived from Surge-observed
 /// facts (INV-EXEC-3) — exit codes and supervisor metering, never span content.
+///
+/// Guarded on the run that holds it, like every other lease write here. The
+/// guard used to be client-side (read the lease, then write) in
+/// `supervisor::release_if_held`, which is a TOCTOU window on the
+/// multi-thread runtime: a human retry plus a redispatch landing between the
+/// read and the write, and the stale release nulls out the NEW run's live
+/// lease (concurrency review 2026-08-26). Returns whether this run's lease
+/// was the one released.
 pub async fn release_lease(
     pool: &SqlitePool,
     issue_id: &str,
+    run_id: &str,
     status: OrchestrationStatus,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let status_s = status.as_str();
-    sqlx::query!(
+    let res = sqlx::query!(
         "UPDATE issue SET status = ?, lease_owner = NULL, lease_run_id = NULL,
                           lease_expires_at = NULL, lease_heartbeat_at = NULL
-         WHERE id = ?",
+         WHERE id = ? AND lease_run_id = ?",
         status_s,
-        issue_id
+        issue_id,
+        run_id
     )
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(res.rows_affected() == 1)
 }
 
 /// One held lease, flattened for the supervisor's boot reconcile and its

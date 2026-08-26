@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE token SET revoked_at = ?\n         WHERE kind = 'runtime' AND project_id = ? AND run_id IS NULL AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f210d1af8213820bc08b6ec4cb802c2679c9d3deaf22be6d4ad2de2389f2f998"
+}

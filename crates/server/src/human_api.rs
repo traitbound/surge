@@ -17,7 +17,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/projects", post(create_project).get(list_projects))
         .route("/projects/{id}/bind", post(bind_project))
-        .route("/projects/{id}/runtime-token", post(mint_runtime_token))
+        .route(
+            "/projects/{id}/runtime-token",
+            post(mint_runtime_token).delete(revoke_runtime_token),
+        )
         .route("/projects/{id}/compile", post(crate::compile_api::compile_project))
         .route("/session/rotate", post(rotate_session))
         .route("/audit", get(recent_audit))
@@ -177,9 +180,35 @@ async fn bind_project(State(state): State<AppState>, Path(project_id): Path<Stri
     }
 }
 
-/// Mint a per-project runtime token (INV-AUTH-1). The plaintext exists only
-/// in this response — it reaches runtimes via spawn-time env injection or
-/// `surge auth` machine-local config (INV-AUTH-4).
+/// Rotate the project's runtime token (INV-AUTH-1; design §17 API TOKENS:
+/// "Each rotatable"). The plaintext exists only in this response — it reaches
+/// runtimes via spawn-time env injection or `surge auth` machine-local config
+/// (INV-AUTH-4).
+///
+/// # Why this endpoint rotates and expires rather than mints (F1)
+///
+/// It used to mint, full stop: `run_id: None`, no expiry, no revocation
+/// endpoint. `revoke_for_run` (WHERE run_id = ?) could never match such a
+/// token and nothing else revoked it, so every call left another immortal
+/// credential behind and calling it twice left BOTH valid forever. A walker
+/// used one, minted 17 minutes earlier against a long-terminal run, to claim
+/// a brand-new lease and append spans to an unrelated terminal run.
+///
+/// All three options were on the table. Removing the endpoint (c) contradicts
+/// design §17, which puts a rotatable per-project runtime token on the
+/// instance settings card, and would take away the only way to exercise the
+/// runtime API by hand. So: (a) rotate — every live project token dies before
+/// the new one is minted, mirroring `rotate_session`, plus `DELETE` for
+/// explicit revocation — *and* (b) an expiry
+/// (`tokens::PROJECT_RUNTIME_TTL_MS`, 15 minutes), because rotation alone
+/// still leaves one live credential behind after a walk and F1's hygiene
+/// property is that ZERO live runtime tokens are not backing a running run.
+/// Rotation bounds the count, the expiry bounds the lifetime, the sweeper
+/// (`supervisor::sweep_expired_tokens`) makes the table say so, and
+/// `runtime_api`'s scoping bounds what one can do while it lives.
+///
+/// In-flight workers are untouched: their credentials are run-bound, and
+/// killing them from here would break dispatch mid-run.
 async fn mint_runtime_token(
     State(state): State<AppState>,
     Path(project_id): Path<String>,
@@ -192,30 +221,61 @@ async fn mint_runtime_token(
         }
         Err(e) => return internal(e, "project lookup failed"),
     }
-    let token = match surge_store::tokens::mint(
-        &state.pool,
-        TokenKind::Runtime,
-        Some(&project_id),
-        now_ms(),
-    )
-    .await
-    {
-        Ok(t) => t,
-        Err(e) => return internal(e, "token mint failed"),
-    };
+    let now = now_ms();
+    let minted =
+        match surge_store::tokens::rotate_project_runtime(&state.pool, &project_id, now).await {
+            Ok(t) => t,
+            Err(e) => return internal(e, "token rotation failed"),
+        };
     if let Err(e) = surge_store::audit::record(
         &state.pool,
-        "token.runtime_minted",
-        &project_id,
+        "token.runtime_rotated",
+        &format!("{project_id} — {} previous project token(s) revoked", minted.rotated_out),
         "human",
         Some(&project_id),
-        now_ms(),
+        now,
     )
     .await
     {
         return internal(e, "audit write failed");
     }
-    Json(serde_json::json!({ "token": token })).into_response()
+    Json(serde_json::json!({
+        "token": minted.plaintext,
+        "expires_at": minted.expires_at,
+        "rotated_out": minted.rotated_out,
+    }))
+    .into_response()
+}
+
+/// Revoke the project's runtime token without minting a replacement — the
+/// other half F1 found missing: a credential you cannot take back is not a
+/// credential, it is a leak with a name. Run-bound tokens are untouched (see
+/// `tokens::revoke_project_runtime`); killing a live worker's credential is
+/// the supervisor's job, at the exit it observes.
+async fn revoke_runtime_token(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+) -> Response {
+    let now = now_ms();
+    let revoked = match surge_store::tokens::revoke_project_runtime(&state.pool, &project_id, now)
+        .await
+    {
+        Ok(n) => n,
+        Err(e) => return internal(e, "token revoke failed"),
+    };
+    if let Err(e) = surge_store::audit::record(
+        &state.pool,
+        "token.runtime_revoked",
+        &format!("{project_id} — {revoked} project token(s) revoked"),
+        "human",
+        Some(&project_id),
+        now,
+    )
+    .await
+    {
+        return internal(e, "audit write failed");
+    }
+    Json(serde_json::json!({ "revoked": revoked })).into_response()
 }
 
 /// Rotate the human session: every existing session is signed out and the
@@ -360,6 +420,13 @@ async fn dispatch_issue(State(state): State<AppState>, Path(id): Path<String>) -
         Ok(crate::supervisor::DispatchOutcome::Refused { run_id, reason }) => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "run_id": run_id, "refused": true, "error": reason })),
+        )
+            .into_response(),
+        // F4: a typo used to be `500 {"error":"dispatch failed"}` with the
+        // reason on the server's stderr only — no run, no span, no audit row.
+        Ok(crate::supervisor::DispatchOutcome::NotFound { reason }) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "run_id": null, "refused": true, "error": reason })),
         )
             .into_response(),
         Err(e) => internal(e, "dispatch failed"),

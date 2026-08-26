@@ -122,9 +122,18 @@ async fn live() -> Live {
             .await
             .unwrap()
     );
-    let rt_token = surge_store::tokens::mint(&pool, TokenKind::Runtime, Some("prj_p"), 1)
-        .await
-        .unwrap();
+    // The credential a worker actually gets: minted for this run and injected
+    // at spawn (INV-AUTH-4), so the plugin exercises the run-bound scope the
+    // heartbeat-hijack fix installed — its own run, its own issue's lease.
+    let rt_token = surge_store::tokens::mint_for_run(
+        &pool,
+        TokenKind::Runtime,
+        Some("prj_p"),
+        Some("run_p"),
+        1,
+    )
+    .await
+    .unwrap();
     Live {
         state,
         api,

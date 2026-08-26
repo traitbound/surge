@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use surge_store::tokens::Identity;
+use surge_store::tokens::{Identity, TokenLookup};
 
 /// Bearer header first, then the session cookie (browser).
 fn presented_token(req: &Request) -> Option<String> {
@@ -48,9 +48,19 @@ async fn identify(state: &AppState, token: Option<String>, path: &str) -> Result
     let Some(token) = token else {
         return Ok(None);
     };
-    match surge_store::tokens::lookup_active(&state.pool, &token).await {
-        Ok(Some(id)) => Ok(Some(id)),
-        Ok(None) => {
+    match surge_store::tokens::lookup_active(&state.pool, &token, now_ms()).await {
+        Ok(TokenLookup::Active(id)) => Ok(Some(id)),
+        Ok(TokenLookup::Expired) => {
+            // Named apart from "invalid" so an operator whose project runtime
+            // token aged out is told what actually happened (INV-ERR-1; the
+            // expiry itself is F1's fix).
+            audit_refusal(state, "auth.expired_token", path, "unknown").await;
+            Err(refusal(
+                StatusCode::UNAUTHORIZED,
+                "token expired — mint a fresh project runtime token (Settings → API TOKENS)",
+            ))
+        }
+        Ok(TokenLookup::Unknown) => {
             audit_refusal(state, "auth.invalid_token", path, "unknown").await;
             Err(refusal(StatusCode::UNAUTHORIZED, "invalid or revoked token"))
         }
@@ -71,7 +81,7 @@ pub async fn require_human(
     match identify(&state, token, &path).await {
         Err(resp) => resp,
         Ok(None) => refusal(StatusCode::UNAUTHORIZED, "authentication required"),
-        Ok(Some(Identity::Runtime { project_id })) => {
+        Ok(Some(Identity::Runtime { project_id, .. })) => {
             // INV-AUTH-2: refused loudly, never silently dropped.
             let actor = format!("rt:{project_id}");
             audit_refusal(&state, "auth.runtime_refused_privileged", &path, &actor).await;

@@ -1,4 +1,4 @@
-//! Work-order repository. The rendered file is one of the four repo writes
+//! Work-order repository. The rendered file is one of the five repo writes
 //! (INV-DATA-1), gitignored and reproducible (INV-DATA-7); the row remembers
 //! what was rendered so hash mismatches are detectable (design §05).
 

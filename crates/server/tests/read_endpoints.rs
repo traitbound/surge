@@ -141,9 +141,10 @@ async fn reads_require_a_human_token() {
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "{uri} must refuse anonymous reads");
     }
     // A runtime token is refused loudly at privileged reads too (INV-AUTH-2).
-    let rt = surge_store::tokens::mint(&state.pool, TokenKind::Runtime, Some("prj_a"), 1)
+    let rt = surge_store::tokens::rotate_project_runtime(&state.pool, "prj_a", surge_server::now_ms())
         .await
-        .unwrap();
+        .unwrap()
+        .plaintext;
     let r = app(state).oneshot(get_req("/api/projects", Some(&rt))).await.unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
 }

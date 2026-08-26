@@ -177,6 +177,7 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
          stdin=$(cat)\n\
          echo \"run=$SURGE_RUN_ID tok=${SURGE_RUNTIME_TOKEN%%${SURGE_RUNTIME_TOKEN#rt_}} plugin=$SURGE_PLUGIN_DIR\" > \"$OUT\"\n\
          echo \"$stdin\" | grep -q 'Work order — Fixture task' && echo stdin-workorder >> \"$OUT\"\n\
+         echo \"$stdin\" | grep -q 'surge_fetch_work_order' && echo stdin-fetchtool >> \"$OUT\"\n\
          test -f .claude/settings.json && echo compiled >> \"$OUT\"\n\
          test -f \"work_orders/$SURGE_ISSUE_ID.md\" && echo workorder >> \"$OUT\"\n\
          git rev-parse --abbrev-ref HEAD >> \"$OUT\"\n\
@@ -198,6 +199,8 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
 
     let observed = std::fs::read_to_string(env.work.path().join("observed.txt")).unwrap();
     assert!(observed.contains("stdin-workorder"), "work order delivered on stdin (F2): {observed}");
+    assert!(observed.contains("stdin-fetchtool"),
+        "the prompt names surge_fetch_work_order, like the seeded implementer body: {observed}");
     assert!(observed.contains(&format!("run={out}")), "{observed}");
     assert!(observed.contains("plugin=/"), "SURGE_PLUGIN_DIR is absolute (F3): {observed}");
     assert!(observed.contains("tok=rt_"), "runtime token injected (INV-AUTH-4): {observed}");
@@ -300,8 +303,11 @@ async fn runtime_capabilities_fetch_claim_heartbeat() {
     let env = setup("#!/bin/sh\nexit 0\n").await;
     compile(&env).await;
     let issue = create_issue(&env).await;
-    let rt = surge_store::tokens::mint(&env.state.pool, TokenKind::Runtime, Some("prj_fix"), 1)
-        .await.unwrap();
+    // The interactive/project credential (unbound): claiming is what it is
+    // for, and it is the one shape that may (INV-EXEC-1, F1).
+    let rt = surge_store::tokens::rotate_project_runtime(
+        &env.state.pool, "prj_fix", surge_server::now_ms())
+        .await.unwrap().plaintext;
     let client = |path: &str, post: bool| {
         let url = format!("{}{}", env.api_base, path);
         let tok = rt.clone();
@@ -735,10 +741,14 @@ async fn a_failed_issue_can_be_retried_and_redispatched() {
         surge_server::supervisor::dispatch_issue(&env.state, "iss_1").await.unwrap(),
         surge_server::supervisor::DispatchOutcome::Spawned { .. }
     ));
-    // Guard: verified and leased issues are never retryable.
-    surge_store::issues::release_lease(&env.state.pool, "iss_1", surge_domain::board::OrchestrationStatus::Verified)
+    // Guard: verified and leased issues are never retryable. The release is
+    // run-guarded now (concurrency review), so it needs the holder's run id.
+    let holder = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap()
+        .lease.expect("the redispatch holds the lease").run_id;
+    assert!(surge_store::issues::release_lease(
+        &env.state.pool, "iss_1", &holder, surge_domain::board::OrchestrationStatus::Verified)
         .await
-        .unwrap();
+        .unwrap());
     assert!(!surge_store::issues::mark_eligible_again(&env.state.pool, "iss_1").await.unwrap());
 }
 
@@ -777,6 +787,28 @@ async fn a_runtime_token_dies_with_its_run() {
         .await
         .unwrap();
     assert_eq!(bound, 1, "the credential is bound to its run");
+}
+
+/// F6: a `succeeded` doc run held a `refused` span, because the prompt said
+/// "run the doc pipeline compiled into .claude/" and the compiled tree
+/// carries every node kind's agents — so the worker also attempted the agent
+/// node and self-reported a refusal. The Observatory rendered a green run
+/// with a red row in it. The prompt is scoped to the doc node now, and says
+/// nothing about work orders or heartbeats: a doc run holds no issue and no
+/// lease (design §23-Fourteen).
+#[tokio::test]
+async fn the_doc_run_prompt_is_scoped_to_the_doc_node() {
+    // The worker runs in the bound repo itself; it captures its own prompt.
+    let env = setup("#!/bin/sh\ncat > prompt.txt\nexit 0\n").await;
+    compile(&env).await;
+    let run_id = surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.unwrap();
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Succeeded);
+
+    let prompt = std::fs::read_to_string(env.repo.path().join("prompt.txt")).unwrap();
+    assert!(prompt.contains("ONLY the doc node"), "scoped to the doc node (F6): {prompt}");
+    assert!(prompt.contains("do not attempt"), "the other nodes are named and excluded: {prompt}");
+    assert!(!prompt.contains("surge_heartbeat"), "a doc run holds no lease to beat: {prompt}");
+    assert!(!prompt.contains("surge_fetch_work_order"), "and no issue to fetch for: {prompt}");
 }
 
 /// S4: abort is the one human-initiated destructive act, and it wrote no span
