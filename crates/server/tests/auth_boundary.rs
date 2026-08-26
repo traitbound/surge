@@ -12,6 +12,19 @@ async fn test_state() -> AppState {
     AppState::new(surge_store::open_in_memory().await.unwrap())
 }
 
+/// Media type only — the charset parameter is not what any assertion means.
+fn content_type(resp: &axum::response::Response) -> String {
+    resp.headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
@@ -185,6 +198,43 @@ async fn runtime_capabilities_are_project_scoped() {
 
     let actions = audit_actions(&state.pool).await;
     assert_eq!(actions.iter().filter(|a| *a == "auth.runtime_refused_scope").count(), 2);
+}
+
+/// Walk-3 finding N11: an unknown path under either nested zone must answer a
+/// JSON 404, not the SPA shell. Before this, the rust-embed fallback caught
+/// every nest miss and returned `200 text/html` — an API client was told
+/// "fine" and handed the UI, and the shape of the answer told an anonymous
+/// caller which routes exist (401) and which do not (200).
+#[tokio::test]
+async fn unknown_api_and_runtime_paths_are_json_404s() {
+    let state = test_state().await;
+    let session = surge_store::tokens::mint(&state.pool, TokenKind::Session, None, 1).await.unwrap();
+    let router = app(state.clone());
+
+    for path in ["/api/nonexistent", "/runtime/nonexistent"] {
+        // The 404 does not depend on authentication: the fallback is
+        // registered after the auth layer, so it answers the same either way.
+        for token in [None, Some(session.as_str())] {
+            let r = router.clone().oneshot(req("GET", path, token, None)).await.unwrap();
+            assert_eq!(r.status(), StatusCode::NOT_FOUND, "{path} (token: {})", token.is_some());
+            assert_eq!(content_type(&r), "application/json", "{path} must not answer HTML");
+            assert_eq!(body_json(r).await["error"], "unknown endpoint");
+        }
+    }
+
+    // A real route still answers from its own handler, not the fallback.
+    let r = router.clone().oneshot(req("GET", "/api/audit", Some(&session), None)).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    // And a genuine UI path still belongs to the SPA fallback: the embedded
+    // shell in a built tree, the dev-workflow pointer in a tree with no
+    // `npm run build` — never the API's JSON.
+    let r = router.oneshot(req("GET", "/projects", None, None)).await.unwrap();
+    let (status, ct) = (r.status(), content_type(&r));
+    assert_ne!(ct, "application/json", "a UI path was answered as an API path");
+    if status == StatusCode::OK {
+        assert!(ct.starts_with("text/html"), "embedded shell must be HTML, got {ct}");
+    }
 }
 
 #[tokio::test]

@@ -11,7 +11,7 @@ mod runtime_api;
 pub mod supervisor;
 mod ui_assets;
 
-use axum::{middleware, routing::get, Json, Router};
+use axum::{http::StatusCode, middleware, response::IntoResponse, routing::get, Json, Router};
 use sqlx::SqlitePool;
 
 pub const BIND: &str = "127.0.0.1:7420";
@@ -49,21 +49,34 @@ async fn healthz(
     })
 }
 
+/// Unknown path under `/api` or `/runtime`. Without it the SPA fallback
+/// catches every nest miss and answers `200 text/html` — an API client is
+/// told "fine" and handed the UI shell, and the 401-for-a-real-route vs
+/// 200-HTML-for-a-typo split let an anonymous caller read off the route table
+/// (walk-3 finding N11). Registered *after* the auth layer, so `layer`'s
+/// "existing routes only" rule leaves it unauthenticated and the answer is
+/// the same anonymously and authenticated.
+async fn api_not_found() -> axum::response::Response {
+    (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "unknown endpoint" })))
+        .into_response()
+}
+
 /// The full router. Three zones:
 /// - public: `/healthz`, the one-time claim URL
 /// - `/api/*`: human token only — a runtime token is refused loudly and
 ///   audited (INV-AUTH-2)
 /// - `/runtime/*`: the five runtime capabilities; a human token also passes
 ///   (everything a machine may do is a subset of what a human may do, §04)
+///
+/// Each nested zone owns its own JSON 404, so the SPA fallback below serves
+/// genuine UI paths only.
 pub fn app(state: AppState) -> Router {
-    let human = human_api::router().layer(middleware::from_fn_with_state(
-        state.clone(),
-        auth::require_human,
-    ));
-    let runtime = runtime_api::router().layer(middleware::from_fn_with_state(
-        state.clone(),
-        auth::require_runtime_or_human,
-    ));
+    let human = human_api::router()
+        .layer(middleware::from_fn_with_state(state.clone(), auth::require_human))
+        .fallback(api_not_found);
+    let runtime = runtime_api::router()
+        .layer(middleware::from_fn_with_state(state.clone(), auth::require_runtime_or_human))
+        .fallback(api_not_found);
     Router::new()
         .route("/healthz", get(healthz))
         .route("/claim/{token}", get(claim::claim_session))

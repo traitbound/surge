@@ -100,6 +100,7 @@ mod tests {
 #[cfg(test)]
 mod object_model_tests {
     use super::tests_support::*;
+    use surge_domain::board::WorkOrder;
     use surge_domain::fixtures;
     use surge_domain::observatory::{Run, RunKind, RunStatus, Span, SpanRole, SpanStatus};
 
@@ -282,6 +283,53 @@ mod object_model_tests {
 
     }
 
+    /// Walk-3 finding N10: `work_orders::latest_for_issue` had no caller and
+    /// no test. It is kept because it is the read half of the hash-mismatch
+    /// check — INV-DATA-6 admits `work_orders/` reads for exactly that, and
+    /// the row exists to be compared against the file on disk (design §05) —
+    /// so what needs proving is the "latest" part: revisions accumulate and
+    /// the highest one wins, whatever order they were written in.
+    #[tokio::test]
+    async fn work_order_read_returns_the_highest_revision() {
+        let pool = crate::open_in_memory().await.unwrap();
+        seed_project_and_pipeline(&pool).await;
+        seed_issue(&pool, "iss_1").await;
+        seed_issue(&pool, "iss_2").await;
+
+        assert_eq!(crate::work_orders::latest_for_issue(&pool, "iss_1").await.unwrap(), None);
+
+        // Revision 2 is written before revision 1: "latest" is the revision
+        // number, not the insertion order.
+        for (id, issue, rev, t) in [
+            ("wo_1_r2", "iss_1", 2, 2_000i64),
+            ("wo_1_r1", "iss_1", 1, 1_000),
+            ("wo_2_r1", "iss_2", 1, 3_000),
+        ] {
+            crate::work_orders::insert(&pool, &WorkOrder {
+                id: id.into(),
+                issue_id: issue.into(),
+                path: format!("work_orders/{issue}.md"),
+                revision: rev,
+                content_hash: format!("sha256:{id}"),
+                created_at: t,
+            })
+            .await
+            .unwrap();
+        }
+
+        let wo = crate::work_orders::latest_for_issue(&pool, "iss_1").await.unwrap().unwrap();
+        assert_eq!(wo.id, "wo_1_r2");
+        assert_eq!(wo.revision, 2);
+        assert_eq!(wo.content_hash, "sha256:wo_1_r2");
+        assert_eq!(wo.path, "work_orders/iss_1.md");
+        // Scoped to its issue, and absent issues read as None rather than error.
+        assert_eq!(
+            crate::work_orders::latest_for_issue(&pool, "iss_2").await.unwrap().unwrap().id,
+            "wo_2_r1"
+        );
+        assert_eq!(crate::work_orders::latest_for_issue(&pool, "iss_absent").await.unwrap(), None);
+    }
+
     #[tokio::test]
     async fn audit_appends_and_reads_back() {
         let pool = crate::open_in_memory().await.unwrap();
@@ -312,5 +360,28 @@ mod tests_support {
         .unwrap();
         let (p, n, e) = fixtures::two_node_pipeline();
         crate::pipelines::insert_graph(pool, &p, &n, &e).await.unwrap();
+    }
+
+    /// An eligible issue in the fixture project — the FK target a work-order
+    /// row needs.
+    pub async fn seed_issue(pool: &SqlitePool, id: &str) {
+        crate::issues::insert(pool, &surge_domain::board::Issue {
+            id: id.into(),
+            project_id: "prj_fixture".into(),
+            title: format!("issue {id}"),
+            wave: 1,
+            phase: "phase-0".into(),
+            status: surge_domain::board::OrchestrationStatus::Eligible,
+            work_order_hash: format!("sha256:wo_{id}"),
+            gate2: surge_domain::board::Gate2State::Pending,
+            lease: None,
+            retry_count: 0,
+            disposition: None,
+            priority: 0,
+            is_wave_integration: false,
+            created_at: 1,
+        })
+        .await
+        .unwrap();
     }
 }
