@@ -44,8 +44,12 @@ function SpanRow({ span }: { span: Span }) {
     <>
       <div className="span-row" style={{ paddingLeft: Number(span.depth) * 18 }}>
         <span className="role">{span.role}</span>
-        <span className="label" title={span.body ?? undefined}>
-          {span.node_id ?? span.id}
+        {span.node_id && <span className="node-tag">{span.node_id}</span>}
+        <span className="label" title={span.id}>
+          {/* The body is what an operator reads. Leading with an id turned
+              every row into an opaque hash, since node_id is not yet emitted
+              (smoke walk 3, N3) — the content sat unread in a tooltip. */}
+          {span.body ?? span.node_id ?? span.id}
         </span>
         <span className="metrics">
           <span className="mono faint">{relativeTime(span.started_at)}</span>

@@ -82,11 +82,15 @@ function BindProjectDialog({ onDone }: { onDone: (created: boolean) => void }) {
     }
     setBusy(true);
     try {
-      await api.createProject({
+      const created = await api.createProject({
         id: `prj_${slug}`,
         name: name.trim(),
         repo_path: repoPath.trim(),
       });
+      // Registering the row is only half of it: binding is what writes
+      // surge.yaml into the repo (INV-DATA-1). Reporting "bound" without
+      // this call was a lie the badge quietly contradicted.
+      await api.bindProject(created.id);
       toast("success", `Project "${name.trim()}" bound.`);
       onDone(true);
     } catch (e) {
@@ -99,8 +103,8 @@ function BindProjectDialog({ onDone }: { onDone: (created: boolean) => void }) {
     <>
       <h2>Bind project</h2>
       <p className="sub">
-        Registers the project in Surge. surge.yaml lands in the repo at first compile
-        (closed write list, INV-DATA-1).
+        Registers the project and writes surge.yaml into the repo — the only file
+        binding writes (closed write list, INV-DATA-1).
       </p>
       <div className="field">
         <label>Name</label>
@@ -236,7 +240,10 @@ function ProjectCard({
       onOpenObservatory();
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        toast("error", `Dispatch refused — ${e.message}`);
+        // The server's reason already starts with "dispatch refused — ";
+        // prefixing our own produced "Dispatch refused — dispatch refused — …".
+        const reason = e.message.replace(/^dispatch refused\s*—\s*/i, "");
+        toast("error", `Dispatch refused — ${reason}`);
       } else {
         toast("error", e instanceof Error ? e.message : String(e));
       }
