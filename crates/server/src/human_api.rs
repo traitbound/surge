@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/audit", get(recent_audit))
         .route("/issues", post(create_issue))
         .route("/issues/{id}/dispatch", post(dispatch_issue))
+        .route("/issues/{id}/retry", post(retry_issue))
         .route("/runs", get(list_runs))
         .route("/runs/{id}/abort", post(abort_run))
         .route("/runs/{id}/spans", get(run_spans))
@@ -253,6 +254,55 @@ async fn recent_audit(State(state): State<AppState>, Query(q): Query<AuditQuery>
     match surge_store::audit::recent(&state.pool, q.limit.unwrap_or(50)).await {
         Ok(entries) => Json(entries).into_response(),
         Err(e) => internal(e, "audit read failed"),
+    }
+}
+
+/// Put a failed or aborted issue back in the eligible column (§06). Without
+/// this, a run reconciled after a supervisor restart left its issue
+/// permanently un-dispatchable with no recovery but hand-editing the database
+/// (smoke walk 3, N2).
+async fn retry_issue(State(state): State<AppState>, Path(issue_id): Path<String>) -> Response {
+    let now = now_ms();
+    let issue = match surge_store::issues::get(&state.pool, &issue_id).await {
+        Ok(Some(i)) => i,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "unknown issue" })))
+                .into_response()
+        }
+        Err(e) => return internal(e, "issue lookup failed"),
+    };
+    match surge_store::issues::mark_eligible_again(&state.pool, &issue_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            // Refusals are data (INV-ERR-1): say which state blocked it.
+            let reason = format!(
+                "retry refused — issue is {}{}; only failed or aborted issues can be retried",
+                issue.status.as_str(),
+                if issue.lease.is_some() { " and still leased" } else { "" }
+            );
+            if let Err(e) = surge_store::audit::record(
+                &state.pool, "issue.retry_refused", &reason, "human", Some(&issue.project_id), now,
+            )
+            .await
+            {
+                return internal(e, "audit write failed");
+            }
+            return (StatusCode::CONFLICT, Json(serde_json::json!({ "error": reason })))
+                .into_response();
+        }
+        Err(e) => return internal(e, "retry failed"),
+    }
+    if let Err(e) = surge_store::audit::record(
+        &state.pool, "issue.retried", &issue_id, "human", Some(&issue.project_id), now,
+    )
+    .await
+    {
+        return internal(e, "audit write failed");
+    }
+    match surge_store::issues::get(&state.pool, &issue_id).await {
+        Ok(Some(i)) => Json(i).into_response(),
+        Ok(None) => internal(anyhow::anyhow!("issue vanished"), "retry failed"),
+        Err(e) => internal(e, "issue reload failed"),
     }
 }
 
