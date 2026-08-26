@@ -44,6 +44,39 @@ async fn live() -> Live {
     )
     .await
     .unwrap();
+    // A fresh materialization the run executes under — what the work-order
+    // fetch reports back to the worker (INV-ID-1).
+    surge_store::pipelines::insert_graph(
+        &pool,
+        &surge_domain::pipeline::Pipeline {
+            id: "pl_p".into(),
+            name: "p".into(),
+            version: 1,
+            content_hash: "sha256:pipe".into(),
+            blessed: false,
+            forked_from: None,
+            created_at: 1,
+        },
+        &[],
+        &[],
+    )
+    .await
+    .unwrap();
+    surge_store::materializations::insert_fresh(
+        &pool,
+        &surge_domain::materialization::Materialization {
+            id: "mat_p".into(),
+            content_hash: "sha256:mat".into(),
+            cache_key: "mk_mat_p".into(),
+            pipeline_id: "pl_p".into(),
+            project_id: "prj_p".into(),
+            signed_by: "h".into(),
+            fresh: true,
+            created_at: 1,
+        },
+    )
+    .await
+    .unwrap();
     let mut issue = surge_domain::board::Issue {
         id: "iss_p".into(),
         project_id: "prj_p".into(),
@@ -145,7 +178,8 @@ async fn mcp_server_speaks_the_protocol_and_reaches_surge() {
     );
     assert_eq!(r["result"]["serverInfo"]["name"], "surge");
 
-    // tools/list — the three phase-0 tools
+    // tools/list — the four phase-0 tools, in INV-AUTH-1 capability order
+    // (claim-lease is deliberately absent: a spawned worker never claims).
     let r = rpc!(serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}));
     let names: Vec<&str> = r["result"]["tools"]
         .as_array()
@@ -155,12 +189,41 @@ async fn mcp_server_speaks_the_protocol_and_reaches_surge() {
         .collect();
     assert_eq!(
         names,
-        vec!["surge_append_span", "surge_heartbeat", "surge_poll_run"]
+        vec![
+            "surge_fetch_work_order",
+            "surge_append_span",
+            "surge_heartbeat",
+            "surge_poll_run"
+        ]
+    );
+
+    // capability 1 through the tool: the worker fetches its OWN work order —
+    // rendered body, pinned hash, live lease, materialization hash (INV-ID-1).
+    let r = rpc!(
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+        "params":{"name":"surge_fetch_work_order","arguments":{}}})
+    );
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    let text = r["result"]["content"][0]["text"].as_str().unwrap();
+    let issue = surge_store::issues::get(&live.state.pool, "iss_p")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(text.contains("issue: iss_p"), "{text}");
+    assert!(
+        text.contains(&format!("work_order_hash: {}", issue.work_order_hash)),
+        "{text}"
+    );
+    assert!(text.contains("materialization_hash: sha256:mat"), "{text}");
+    assert!(text.contains("lease: worker-1"), "{text}");
+    assert!(
+        text.contains(&surge_compiler::work_order::render_work_order(&issue)),
+        "the rendered work-order body reaches the worker verbatim: {text}"
     );
 
     // span-append lands in the store
     let r = rpc!(
-        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
         "params":{"name":"surge_append_span","arguments":{"body":"hello from mcp","status":"ok"}}})
     );
     assert_eq!(r["result"]["isError"], false, "{r}");
@@ -180,7 +243,7 @@ async fn mcp_server_speaks_the_protocol_and_reaches_surge() {
         .unwrap()
         .expires_at;
     let r = rpc!(
-        serde_json::json!({"jsonrpc":"2.0","id":4,"method":"tools/call",
+        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"tools/call",
         "params":{"name":"surge_heartbeat","arguments":{}}})
     );
     assert_eq!(r["result"]["isError"], false, "{r}");
@@ -195,7 +258,7 @@ async fn mcp_server_speaks_the_protocol_and_reaches_surge() {
 
     // status poll: running → then aborted reads as a stop order
     let r = rpc!(
-        serde_json::json!({"jsonrpc":"2.0","id":5,"method":"tools/call",
+        serde_json::json!({"jsonrpc":"2.0","id":6,"method":"tools/call",
         "params":{"name":"surge_poll_run","arguments":{}}})
     );
     assert!(r["result"]["content"][0]["text"]
@@ -206,7 +269,7 @@ async fn mcp_server_speaks_the_protocol_and_reaches_surge() {
         .await
         .unwrap();
     let r = rpc!(
-        serde_json::json!({"jsonrpc":"2.0","id":6,"method":"tools/call",
+        serde_json::json!({"jsonrpc":"2.0","id":7,"method":"tools/call",
         "params":{"name":"surge_poll_run","arguments":{}}})
     );
     assert!(

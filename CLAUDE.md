@@ -10,10 +10,10 @@
 
 ## Stack
 
-Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.0.0.1:7420`, shipped as one static binary.
+Decided 2026-08-08 — this section records the **decisions**, not what is built; phase 0 has landed the server, store, compiler, supervisor, CLI, plugin and a minimal UI, and `docs/phases/phase-0/phase.md` is the authority on which parts exist. Local single-user service on `127.0.0.1:7420`, shipped as one static binary.
 
 - **Server: Rust** — Axum (tower middleware enforces the human-token/runtime-token boundary), SQLite embedded via `sqlx` (single file, WAL, compile-time-checked queries, offline metadata committed; no second process, no network listener), `serde`, `sha2` for content hashing.
-- **Store discipline:** every query lives in `crates/store` behind a typed repository function, compile-checked by `sqlx` and covered by an in-memory integration test; repository functions that write also fire the commit broadcast (ADR-3). Lease, gate, trust and hash paths are `role:critical` (ADR-2).
+- **Store discipline:** every query lives in `crates/store` behind a typed repository function, compile-checked by `sqlx` and covered by an in-memory integration test. Lease, gate, trust and hash paths are `role:critical` (ADR-2). ADR-3's commit broadcast — a write repository function firing the SSE channel inside the committing transaction — is **not built yet**; it ships with Phase 2's SSE bridge (see `crates/store/src/lib.rs:5`, `docs/phases/phase-0/phase.md` Done-when).
 - **UI: React + Vite** — React Flow (`@xyflow/react`) for the pipeline canvas, TanStack Router/Query, Tailwind. UI is a projection of server state; all rules enforced at the API.
 - **Type seam: `ts-rs`** — Rust structs are the single source of truth for the object model; TypeScript types are generated from them at build time.
 - **Realtime: SSE** (`axum::response::sse`) for span streaming, heartbeats, toasts.
@@ -32,7 +32,7 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 - `.claude/context/` — per-area agent context files (append-only)
 - `crates/` — cargo workspace: `domain` (object model, `ts-rs` derives), `store` (SQLite/`sqlx`, embedded migrations), `server` (Axum, bin `surge-server`), `cli` (bin `surge`), `compiler` (materialization compiler + INV-ID-2 hashing; hash-input changes are `role:critical`)
 - `ui/` — Vite + React app; `ui/src/generated/` is ts-rs output (gitignored, regenerate via domain tests, never hand-edit)
-- `integrations/claude-plugin/` — Claude Code plugin (ADR-8): zero-dep Node MCP server (span/heartbeat/status tools), abort-guard + span-emission hooks (also the raw-HTTP fallback glue); registered via compiled `.claude/mcp.json` + settings hooks
+- `integrations/claude-plugin/` — Claude Code plugin (ADR-8): zero-dep Node MCP server (work-order-fetch/span/heartbeat/status tools — four of INV-AUTH-1's five capabilities; claim-lease is the Phase 2 interactive path), abort-guard + span-emission hooks (also the raw-HTTP fallback glue); registered via compiled `.claude/mcp.json` + settings hooks
 
 ## Key commands
 
@@ -40,13 +40,13 @@ Decided 2026-08-08 (nothing implemented yet). Local single-user service on `127.
 - `cargo test --workspace` — tests; the `surge-domain` test target also regenerates `ui/src/generated/` (ts-rs)
 - Schema-change loop: edit `crates/store/migrations/` → `sqlx migrate run --source crates/store/migrations` (with `DATABASE_URL=sqlite://$PWD/.dev.db`; `sqlx database create` once) → `cargo sqlx prepare --workspace -- --all-targets` → commit `.sqlx/` in the same change
 - `cargo run -p surge-server` — serve `127.0.0.1:7420` (`--db <path>`, default `surge.db`; `--plugin-dir <path>` to run a working plugin tree instead of the embedded copy); serves the embedded UI from `/` — build `ui/` first (`npm run build`) or the page tells you to (assets embed at compile time, ADR-4). The Claude Code plugin is embedded too and extracted to `<db-dir>/.surge/plugin/<version>` at boot, so `SURGE_PLUGIN_DIR` resolves from any cwd
-- `ui/`: `npm run dev` (proxies to :7420) · `npm run build` · `npm run typecheck`
+- `ui/`: `npm ci` once, then `npm run dev` (proxies to :7420) · `npm run build` · `npm run typecheck`. All three are gated by `ui/scripts/ensure-generated.mjs` (npm `pre*` hooks): `ui/src/generated/` is gitignored ts-rs output, so on a fresh clone the guard runs `cargo test -p surge-domain` for you, or fails naming that exact command when `cargo` is unreachable. No manual ordering to remember — `cargo` and `npm` can be run in either order (smoke walk 5, F3)
 
 ## Conventions
 
 - Monorepo workspaces from day one; one package per deployable/major concern.
 - Vocabulary from `docs/design.md` §01 is binding: pipeline, library, materialization, work order, Board·Plan, Board·Ops, observatory. Don't invent synonyms.
-- Only four things may be written into a bound workplace repo (see design §01 closed exception list / INV-DATA-1): `surge.yaml`, compiled `.claude/` runtime files, pipeline-declared docs, rendered `work_orders/` files. Reads are closed too (INV-DATA-6): declared docs, `work_orders/`, git state.
+- Only five things may be written into a bound workplace repo (see design §01 closed exception list / INV-DATA-1): `surge.yaml`, compiled `.claude/` runtime files, pipeline-declared docs, rendered `work_orders/` files, and the surge-managed block inside the repo-root `.gitignore` (that block only, INV-DATA-7). Reads are closed too (INV-DATA-6): declared docs, `work_orders/`, git state.
 - Surge owns the actuator: a runtime supervisor spawns headless `claude -p` workers for leased issues (INV-EXEC-1, ADR-5); it never performs the creative work and never drives interactive sessions.
 
 ## Env var names

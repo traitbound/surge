@@ -47,7 +47,7 @@ Surge runs as one local service on one port, for one operator. Everything below 
 
 > **Closed exception list — what may live in the code repo**
 >
-> Planning docs, pipelines, library items and boards live Surge-side. Only four things are written into the workplace repo (INV-DATA-1; the fourth added 2026-08-12 — §03 always required the file, the list had never been amended).
+> Planning docs, pipelines, library items and boards live Surge-side. Only five things are written into the workplace repo (INV-DATA-1; the fourth added 2026-08-12 — §03 always required the file, the list had never been amended; the fifth, the surge-managed block inside the repo-root `.gitignore`, added 2026-08-26 — §23-Twelve/INV-DATA-7 always required the compiler to maintain it).
 >
 > 1. `surge.yaml` at the root — workspace binding, tracker choice, branch format, compiled step definitions. Never secrets.
 > 2. The compiled runtime files a materialization produces — `.claude/settings.json`, `.claude/agents/*.md`, `.claude/skills/*/SKILL.md`, `.claude/hooks/*.sh`.

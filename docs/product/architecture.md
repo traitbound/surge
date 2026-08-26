@@ -22,7 +22,7 @@ graph TB
 
     browser["React UI in browser<br/>React Flow canvas — projection of API state"]
     runtime["IDE runtimes<br/>Claude Code · Cursor · Codex<br/>(runtime token)"]
-    repo[("Bound workplace repos<br/>surge.yaml · .claude/* · declared docs · work_orders/*")]
+    repo[("Bound workplace repos<br/>surge.yaml · .claude/* · declared docs<br/>work_orders/* · .gitignore surge block")]
     tracker["External trackers<br/>Linear · GitHub · built-in"]
     stategit[("surge-state.git<br/>operator-configured backup remote")]
 
@@ -47,7 +47,7 @@ graph TB
 
 ## Reading the diagram
 
-Everything stateful lives in one embedded SQLite database inside one Rust process — no database server, no second port, no cache that can disagree with it (INV-DATA-8). External traffic is deliberate and narrow in every direction: the compiler writes the four closed-list file kinds (INV-DATA-1, committed vs. gitignored per INV-DATA-7), repo I/O reads the three closed-list sources (INV-DATA-6), nothing is ever written to trackers, and the only other outbound path is the operator-configured backup remote — which never carries tokens. Headless workers exist only because the runtime supervisor spawned them for a leased issue (INV-EXEC-1); interactive sessions are human-launched and merely claim leases. The two inbound client kinds map to the two tokens: the browser UI holds the human token with full control; IDE runtimes hold a per-project runtime token limited to five capabilities — fetch work order/lease, claim lease, heartbeat, append spans, poll own-run status — the gap enforced at the API, never in the UI.
+Everything stateful lives in one embedded SQLite database inside one Rust process — no database server, no second port, no cache that can disagree with it (INV-DATA-8). External traffic is deliberate and narrow in every direction: the compiler writes the five closed-list file kinds (INV-DATA-1, committed vs. gitignored per INV-DATA-7 — the fifth being the surge-managed block inside the repo-root `.gitignore`, enumerated 2026-08-26), repo I/O reads the three closed-list sources (INV-DATA-6), nothing is ever written to trackers, and the only other outbound path is the operator-configured backup remote — which never carries tokens. Headless workers exist only because the runtime supervisor spawned them for a leased issue (INV-EXEC-1); interactive sessions are human-launched and merely claim leases. The two inbound client kinds map to the two tokens: the browser UI holds the human token with full control; IDE runtimes hold a per-project runtime token limited to five capabilities — fetch work order/lease, claim lease, heartbeat, append spans, poll own-run status — the gap enforced at the API, never in the UI.
 
 ## ADRs
 

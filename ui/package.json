@@ -4,8 +4,12 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
+    "ensure-generated": "node scripts/ensure-generated.mjs",
+    "predev": "npm run ensure-generated",
     "dev": "vite",
+    "prebuild": "npm run ensure-generated",
     "build": "tsc -b && vite build",
+    "pretypecheck": "npm run ensure-generated",
     "typecheck": "tsc -b"
   },
   "dependencies": {

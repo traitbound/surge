@@ -23,10 +23,12 @@ order, e.g. `docs/summary.md`).
 
 ## Span discipline
 
-Report progress through the three surge MCP tools the compiled runtime
-registers for you. They are the whole reporting surface — everything you need
-is below, and there is no documentation file to go and read: the bound repo's
-read list is closed too (INV-DATA-6).
+Report progress through the surge MCP tools the compiled runtime registers
+for you. They are the whole reporting surface — everything you need is below,
+and there is no documentation file to go and read: the bound repo's read list
+is closed too (INV-DATA-6). (A fourth tool, `surge_fetch_work_order`, is
+registered for issue-backed runs; a doc run holds no issue, so it has nothing
+to return for you — do not call it.)
 
 - `surge_append_span` — required `body` (what happened, in a sentence);
   optional `status` (`ok` · `error` · `refused`, default `ok`), `role`

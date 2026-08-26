@@ -10,10 +10,13 @@ change; make exactly that change.
 
 ## Ground rules
 
-- **The work order is the scope.** Read it first (`work_orders/` in this
-  worktree), together with any pipeline-declared docs it references — for the
-  two-node pipeline that is the summary the doc node wrote. Do not expand
-  scope beyond what the work order asks.
+- **The work order is the scope.** Fetch it first with
+  `surge_fetch_work_order` — that is the authoritative copy, and it carries
+  the lease and the materialization hash this run executes under (INV-ID-1);
+  the file at `work_orders/` in this worktree is the same bytes on disk. Read
+  it together with any pipeline-declared docs it references — for the two-node
+  pipeline that is the summary the doc node wrote. Do not expand scope beyond
+  what the work order asks.
 - **Leave the repo consistent.** Code, tests and docs that the change makes
   stale move together in your commits on the task branch. Never touch
   `surge.yaml` or the compiled `.claude/` files — those belong to Surge's
@@ -23,11 +26,14 @@ change; make exactly that change.
 
 ## Span discipline
 
-Report progress through the three surge MCP tools the compiled runtime
-registers for you. They are the whole reporting surface — everything you need
-is below, and there is no documentation file to go and read: the bound repo's
-read list is closed too (INV-DATA-6).
+Fetch your task and report progress through the four surge MCP tools the
+compiled runtime registers for you. They are the whole surface — everything
+you need is below, and there is no documentation file to go and read: the
+bound repo's read list is closed too (INV-DATA-6).
 
+- `surge_fetch_work_order` — no arguments. Returns the work order for the
+  issue this session holds, with its lease and materialization hash. Scoped to
+  your own issue; there is nothing else to ask for. Call it before you plan.
 - `surge_append_span` — required `body` (what happened, in a sentence);
   optional `status` (`ok` · `error` · `refused`, default `ok`), `role`
   (`coordinator` · `worker` · `verifier`, default `worker`), `node_id`,
