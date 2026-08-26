@@ -369,21 +369,17 @@ async fn dispatch_issue(State(state): State<AppState>, Path(id): Path<String>) -
 /// The abort ledger write (§06-06): effective at the worker's next status
 /// poll; the lease clock is the backstop if heartbeats stop first.
 async fn abort_run(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let now = now_ms();
-    match surge_store::observatory::abort_run(&state.pool, &id, now).await {
-        Ok(true) => {
-            if let Err(e) =
-                surge_store::audit::record(&state.pool, "run.aborted", &id, "human", None, now).await
-            {
-                return internal(e, "audit write failed");
-            }
-            Json(serde_json::json!({ "ok": true })).into_response()
-        }
-        Ok(false) => (StatusCode::CONFLICT, Json(serde_json::json!({ "error": "run is not running" })))
-            .into_response(),
-        Err(e) => internal(e, "abort failed"),
+    // Ledger write, reason span and audit all live in the supervisor so this
+    // handler and the tests exercise the same path (smoke walk 4, S4).
+    if surge_server_abort(&state, &id).await {
+        Json(serde_json::json!({ "ok": true })).into_response()
+    } else {
+        (StatusCode::CONFLICT, Json(serde_json::json!({ "error": "run is not running" })))
+            .into_response()
     }
 }
+
+use crate::supervisor::abort_run as surge_server_abort;
 
 async fn dispatch_doc_run(State(state): State<AppState>, Path(project_id): Path<String>) -> Response {
     match crate::supervisor::dispatch_doc_run(&state, &project_id).await {

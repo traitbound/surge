@@ -20,6 +20,16 @@ struct Assets;
 pub async fn serve(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let candidate = if path.is_empty() { "index.html" } else { path };
+    // A missing hashed chunk is a 404, not the shell: serving HTML under a
+    // .js request reaches the user as an opaque MIME/parse error instead of a
+    // cache-bust hint (smoke walk 4, S6). SPA routes (no extension) still fall
+    // through to index.html.
+    if Assets::get(candidate).is_none()
+        && (candidate.starts_with("assets/")
+            || std::path::Path::new(candidate).extension().is_some())
+    {
+        return (StatusCode::NOT_FOUND, "asset not found").into_response();
+    }
     let file = Assets::get(candidate).or_else(|| Assets::get("index.html"));
     match file {
         Some(f) => {
