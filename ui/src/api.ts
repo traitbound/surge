@@ -43,6 +43,12 @@ export const api = {
   createProject: (body: { id: string; name: string; repo_path: string }) =>
     request<Project>("/api/projects", { method: "POST", body: JSON.stringify(body) }),
 
+  /// Writes surge.yaml into the repo and flips surge_yaml_written — the
+  /// second half of binding. Creating the row alone leaves the project
+  /// registered but unbound (INV-DATA-1).
+  bindProject: (projectId: string) =>
+    request<Project>(`/api/projects/${encodeURIComponent(projectId)}/bind`, { method: "POST" }),
+
   compile: (projectId: string, pipelineId: string) =>
     request<{
       materialization: Materialization;
