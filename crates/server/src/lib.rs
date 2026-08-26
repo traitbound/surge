@@ -3,6 +3,7 @@
 //! (INV-AUTH-1).
 
 pub mod auth;
+pub mod plugin_assets;
 mod claim;
 mod compile_api;
 mod human_api;
