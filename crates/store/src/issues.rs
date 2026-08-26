@@ -151,12 +151,15 @@ pub async fn heartbeat(
 /// read and the write, and the stale release nulls out the NEW run's live
 /// lease (concurrency review 2026-08-26). Returns whether this run's lease
 /// was the one released.
-pub async fn release_lease(
-    pool: &SqlitePool,
+pub async fn release_lease<'e, E>(
+    executor: E,
     issue_id: &str,
     run_id: &str,
     status: OrchestrationStatus,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let status_s = status.as_str();
     let res = sqlx::query!(
         "UPDATE issue SET status = ?, lease_owner = NULL, lease_run_id = NULL,
@@ -166,7 +169,7 @@ pub async fn release_lease(
         issue_id,
         run_id
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(res.rows_affected() == 1)
 }
@@ -210,13 +213,16 @@ pub async fn held_leases(pool: &SqlitePool) -> anyhow::Result<Vec<HeldLease>> {
 /// has a live claimant. Auto-retry policy and the cap-at-3 rule are the
 /// dispatcher's (Phase 2); this is the human-initiated path that keeps a
 /// reconciled run from being a dead end (smoke walk 3, N2).
-pub async fn mark_eligible_again(pool: &SqlitePool, issue_id: &str) -> anyhow::Result<bool> {
+pub async fn mark_eligible_again<'e, E>(executor: E, issue_id: &str) -> anyhow::Result<bool> 
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let res = sqlx::query!(
         "UPDATE issue SET status = 'eligible', retry_count = retry_count + 1
          WHERE id = ? AND lease_owner IS NULL AND status IN ('failed', 'aborted')",
         issue_id
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(res.rows_affected() == 1)
 }

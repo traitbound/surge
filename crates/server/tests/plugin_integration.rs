@@ -62,7 +62,7 @@ async fn live() -> Live {
     )
     .await
     .unwrap();
-    surge_store::materializations::insert_fresh(
+    surge_store::materializations::insert_fresh_committed(
         &pool,
         &surge_domain::materialization::Materialization {
             id: "mat_p".into(),

@@ -158,20 +158,22 @@ async fn bind_project(State(state): State<AppState>, Path(project_id): Path<Stri
     {
         return internal(e.into(), "surge.yaml write failed");
     }
-    if let Err(e) = surge_store::projects::mark_surge_yaml_written(&state.pool, &project_id).await {
-        return internal(e, "bind flag update failed");
-    }
-    if let Err(e) = surge_store::audit::record(
-        &state.pool,
-        "project.bound",
-        &project_id,
-        "human",
-        Some(&project_id),
-        now,
-    )
-    .await
-    {
-        return internal(e, "audit write failed");
+    // Flag and audit commit together (INV-DATA-8). The filesystem write above
+    // cannot join the transaction — it is idempotent and the compiler rewrites
+    // the same header, so a crash after it leaves a correct file with no claim
+    // to have been bound, which is the safe direction to fail.
+    let commit = async {
+        let mut tx = state.pool.begin().await?;
+        surge_store::projects::mark_surge_yaml_written(&mut *tx, &project_id).await?;
+        surge_store::audit::record(
+            &mut *tx, "project.bound", &project_id, "human", Some(&project_id), now,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok::<_, anyhow::Error>(())
+    };
+    if let Err(e) = commit.await {
+        return internal(e, "bind commit failed");
     }
     match surge_store::projects::get(&state.pool, &project_id).await {
         Ok(Some(p)) => Json(p).into_response(),
@@ -331,7 +333,22 @@ async fn retry_issue(State(state): State<AppState>, Path(issue_id): Path<String>
         }
         Err(e) => return internal(e, "issue lookup failed"),
     };
-    match surge_store::issues::mark_eligible_again(&state.pool, &issue_id).await {
+    // The status flip and its audit entry commit together (INV-DATA-8) — a
+    // retry that re-opened an issue with no record of who re-opened it would
+    // break INV-OBS-1 through the same crack.
+    let retried = async {
+        let mut tx = state.pool.begin().await?;
+        let moved = surge_store::issues::mark_eligible_again(&mut *tx, &issue_id).await?;
+        if moved {
+            surge_store::audit::record(
+                &mut *tx, "issue.retried", &issue_id, "human", Some(&issue.project_id), now,
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok::<_, anyhow::Error>(moved)
+    };
+    match retried.await {
         Ok(true) => {}
         Ok(false) => {
             // Refusals are data (INV-ERR-1): say which state blocked it.
@@ -350,14 +367,7 @@ async fn retry_issue(State(state): State<AppState>, Path(issue_id): Path<String>
             return (StatusCode::CONFLICT, Json(serde_json::json!({ "error": reason })))
                 .into_response();
         }
-        Err(e) => return internal(e, "retry failed"),
-    }
-    if let Err(e) = surge_store::audit::record(
-        &state.pool, "issue.retried", &issue_id, "human", Some(&issue.project_id), now,
-    )
-    .await
-    {
-        return internal(e, "audit write failed");
+        Err(e) => return internal(e, "retry commit failed"),
     }
     match surge_store::issues::get(&state.pool, &issue_id).await {
         Ok(Some(i)) => Json(i).into_response(),

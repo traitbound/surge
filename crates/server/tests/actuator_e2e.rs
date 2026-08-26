@@ -117,7 +117,7 @@ async fn compile(env: &Env) {
     }
     let project = surge_store::projects::get(&env.state.pool, "prj_fix").await.unwrap().unwrap();
     let compiled = surge_compiler::compile(&p, &n, &e, &lib, &project).unwrap();
-    surge_store::materializations::insert_fresh(&env.state.pool, &surge_domain::materialization::Materialization {
+    surge_store::materializations::insert_fresh_committed(&env.state.pool, &surge_domain::materialization::Materialization {
         id: compiled.cache_key.clone(),
         content_hash: compiled.materialization_hash.clone(),
         cache_key: compiled.cache_key.clone(),

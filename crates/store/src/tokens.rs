@@ -86,18 +86,21 @@ fn generate(kind: TokenKind) -> String {
 /// makes unrepresentable — minted with `run_id: None` and no expiry,
 /// revocable by nothing, still claiming fresh leases 17 minutes after its run
 /// went terminal (smoke walk 5).
-pub async fn mint(
-    pool: &SqlitePool,
+pub async fn mint<'e, E>(
+    executor: E,
     kind: TokenKind,
     project_id: Option<&str>,
     now: i64,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<String>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     anyhow::ensure!(
         kind != TokenKind::Runtime,
         "runtime credentials need a lifecycle: mint_for_run (run-bound) or \
          rotate_project_runtime (expiring) — never a bare mint (F1)"
     );
-    insert_token(pool, kind, project_id, None, None, now).await
+    insert_token(executor, kind, project_id, None, None, now).await
 }
 
 /// Mint a credential bound to one run. The binding is what makes revocation
@@ -109,25 +112,31 @@ pub async fn mint(
 /// does — an abort lands at the worker's next status poll (§06-06) and that
 /// poll needs a live token — so its clock is the observed process exit, never
 /// a timestamp.
-pub async fn mint_for_run(
-    pool: &SqlitePool,
+pub async fn mint_for_run<'e, E>(
+    executor: E,
     kind: TokenKind,
     project_id: Option<&str>,
     run_id: Option<&str>,
     now: i64,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<String>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     debug_assert_eq!(kind == TokenKind::Runtime, project_id.is_some());
-    insert_token(pool, kind, project_id, run_id, None, now).await
+    insert_token(executor, kind, project_id, run_id, None, now).await
 }
 
-async fn insert_token(
-    pool: &SqlitePool,
+async fn insert_token<'e, E>(
+    executor: E,
     kind: TokenKind,
     project_id: Option<&str>,
     run_id: Option<&str>,
     expires_at: Option<i64>,
     now: i64,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<String>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let plaintext = generate(kind);
     let token_hash = hash(&plaintext);
     let kind_s = kind.as_str();
@@ -141,7 +150,7 @@ async fn insert_token(
         expires_at,
         now
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(plaintext)
 }
@@ -292,7 +301,10 @@ pub async fn lookup_active(
 
 /// One-time claim consumption (INV-AUTH-5): atomic revoke-if-active, so a
 /// second visit — or a race — gets `false`.
-pub async fn consume_claim(pool: &SqlitePool, plaintext: &str, now: i64) -> anyhow::Result<bool> {
+pub async fn consume_claim<'e, E>(executor: E, plaintext: &str, now: i64) -> anyhow::Result<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let token_hash = hash(plaintext);
     let res = sqlx::query!(
         "UPDATE token SET revoked_at = ?
@@ -300,7 +312,7 @@ pub async fn consume_claim(pool: &SqlitePool, plaintext: &str, now: i64) -> anyh
         now,
         token_hash
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(res.rows_affected() == 1)
 }

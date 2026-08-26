@@ -36,9 +36,12 @@ pub async fn insert(pool: &SqlitePool, p: &Project) -> anyhow::Result<()> {
 
 /// Record that binding wrote `surge.yaml` into the project's repo (phase 0
 /// item 4, INV-DATA-1). Returns whether a row was updated.
-pub async fn mark_surge_yaml_written(pool: &SqlitePool, id: &str) -> anyhow::Result<bool> {
+pub async fn mark_surge_yaml_written<'e, E>(executor: E, id: &str) -> anyhow::Result<bool> 
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let res = sqlx::query!("UPDATE project SET surge_yaml_written = 1 WHERE id = ?", id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(res.rows_affected() > 0)
 }
