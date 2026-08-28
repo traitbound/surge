@@ -87,6 +87,17 @@ graph TB
 
 Latent in phase 0 because pipelines are seeded, never authored. The canvas is what exposes it.
 
+| **A pre-existing `surge.db` keeps the old placeholder `content_hash`.** ESC-1 (`3ecd585`) makes the seed derive the hash before insert, but its `exists()` guard skips databases that already hold the row, and correcting it in place would need an update on a published pipeline version (INV-DATA-3). **Remedy: delete the local dev DB.** Inert today — nothing in production reads the column; `crates/server/src/compile_api.rs:43` loads the graph and `crates/compiler/src/lib.rs:119` recomputes the hash from it. It stops being inert the moment a phase-1.1 feature reads the column | ESC-1 review, 2026-08-28 | `pipeline-assignment` |
+| **`insert_graph` accepts whatever hash it is handed**, so the ESC-1 fix is one caller away from regressing. Today the seed is the only production caller (verified by grep across `crates/`, `ui/`, `integrations/`) | ESC-1 review, 2026-08-28 | `pipeline-assignment` |
+
+### Decide before `pipeline-assignment`: where `pipeline_content_hash` lives
+
+The ESC-1 reviewer proposed a third option that neither the implementer nor I had considered, and it is better than both: **move `pipeline_content_hash` from `surge-compiler` into `surge-domain`.** `crates/compiler/src/hash.rs` imports nothing but `surge_domain::pipeline` types plus `serde`/`sha2`/`hex`, so relocating it adds **no crate edge in either direction** — and it dissolves the residual gap entirely: the fixture could compute its own identity, and `insert_graph` could derive the hash rather than accept one.
+
+The alternative that looks obvious — having `insert_graph` call the compiler — is the *wrong* structural fix: it puts `surge-store → surge-compiler` in the shipped graph, and the honest home for hash derivation is the publish path, not a repository function.
+
+Relocation is `role:critical` (code map, compiler row: hash-input changes are serialized), so it is not a drive-by. Decide it before `pipeline-assignment` adds the second writer.
+
 ## Scoping assumptions
 
 - verify at spec time: the Phase 0 pipeline data format is expressive enough to be the round-trip format. Canvas-only state (positions, frames, stickies) is excluded from the hash by INV-ID-2, so lossiness there cannot break fidelity — but it *can* break the byte-identical second pass, which is why that is a separate Done-when line.
