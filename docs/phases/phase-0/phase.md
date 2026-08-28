@@ -1,6 +1,6 @@
 # Phase 0 — The materialization loop
 
-**Status:** not_started
+**Status:** in_progress — all walk-5 findings fixed; last recorded verdict is NO-GO (`smoke-5-2026-08-26.md`, SHA `204e79d`), awaiting the re-walk on the current head.
 **Commitment level:** Phase 0 — ships to its real user (the operator) immediately; nothing here is throwaway.
 **Time horizon:** ~3 weeks
 
