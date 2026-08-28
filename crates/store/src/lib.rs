@@ -100,6 +100,7 @@ mod tests {
 #[cfg(test)]
 mod object_model_tests {
     use super::tests_support::*;
+    use surge_compiler::pipeline_content_hash;
     use surge_domain::board::WorkOrder;
     use surge_domain::fixtures;
     use surge_domain::observatory::{Run, RunKind, RunStatus, Span, SpanRole, SpanStatus};
@@ -107,7 +108,8 @@ mod object_model_tests {
     #[tokio::test]
     async fn pipeline_graph_roundtrips_and_traverses() {
         let pool = crate::open_in_memory().await.unwrap();
-        let (pipeline, nodes, edges) = fixtures::two_node_pipeline();
+        let (nodes, edges) = fixtures::two_node_graph();
+        let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
         crate::pipelines::insert_graph(&pool, &pipeline, &nodes, &edges).await.unwrap();
 
         let (p2, mut n2, e2) = crate::pipelines::load_graph(&pool, &pipeline.id).await.unwrap();
@@ -130,8 +132,11 @@ mod object_model_tests {
     #[tokio::test]
     async fn dangling_edge_is_refused_by_the_engine() {
         let pool = crate::open_in_memory().await.unwrap();
-        let (pipeline, nodes, mut edges) = fixtures::two_node_pipeline();
+        let (nodes, mut edges) = fixtures::two_node_graph();
         edges[0].to_node = "nd_missing".into();
+        // Hashed after the mutation: the row the engine is asked to reject is
+        // internally consistent, so the FK is the only reason it can fail.
+        let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
         let err = crate::pipelines::insert_graph(&pool, &pipeline, &nodes, &edges).await;
         assert!(err.is_err(), "FK on (pipeline_id, to_node) must reject a dangling edge");
         // And the transaction rolled back whole (INV-DATA-8): no orphan pipeline row.
@@ -517,6 +522,7 @@ mod object_model_tests {
 #[cfg(test)]
 mod tests_support {
     use sqlx::SqlitePool;
+    use surge_compiler::pipeline_content_hash;
     use surge_domain::fixtures;
 
     /// Seed the FK targets run/span rows need: one project, the fixture pipeline.
@@ -528,7 +534,8 @@ mod tests_support {
         .execute(pool)
         .await
         .unwrap();
-        let (p, n, e) = fixtures::two_node_pipeline();
+        let (n, e) = fixtures::two_node_graph();
+        let p = fixtures::two_node_pipeline(pipeline_content_hash(&n, &e));
         crate::pipelines::insert_graph(pool, &p, &n, &e).await.unwrap();
     }
 

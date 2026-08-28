@@ -47,7 +47,7 @@ fn project() -> Project {
 
 #[test]
 fn hash_covers_semantics_and_ignores_presentation() {
-    let (_, nodes, edges) = fixtures::two_node_pipeline();
+    let (nodes, edges) = fixtures::two_node_graph();
     let base = pipeline_content_hash(&nodes, &edges);
 
     // Presentation churn: same hash (INV-ID-2).
@@ -80,7 +80,8 @@ fn hash_covers_semantics_and_ignores_presentation() {
 
 #[test]
 fn fixture_compiles_deterministically() {
-    let (pipeline, nodes, edges) = fixtures::two_node_pipeline();
+    let (nodes, edges) = fixtures::two_node_graph();
+    let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
     let lib = fixture_library();
     let a = compile(&pipeline, &nodes, &edges, &lib, &project()).unwrap();
     let b = compile(&pipeline, &nodes, &edges, &lib, &project()).unwrap();
@@ -111,7 +112,8 @@ fn fixture_compiles_deterministically() {
 
 #[test]
 fn untrusted_import_blocks_compile_with_names() {
-    let (pipeline, nodes, edges) = fixtures::two_node_pipeline();
+    let (nodes, edges) = fixtures::two_node_graph();
+    let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
     let mut lib = fixture_library();
     lib.get_mut(&(LibraryItemKind::Skill, "write-summary".into(), 1))
         .unwrap()
@@ -124,7 +126,8 @@ fn untrusted_import_blocks_compile_with_names() {
 
 #[test]
 fn missing_item_refuses() {
-    let (pipeline, nodes, edges) = fixtures::two_node_pipeline();
+    let (nodes, edges) = fixtures::two_node_graph();
+    let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
     let mut lib = fixture_library();
     lib.remove(&(LibraryItemKind::Subagent, "implementer".into(), 1));
     assert!(matches!(
@@ -135,7 +138,8 @@ fn missing_item_refuses() {
 
 #[test]
 fn write_to_repo_lands_files_and_maintains_gitignore_block() {
-    let (pipeline, nodes, edges) = fixtures::two_node_pipeline();
+    let (nodes, edges) = fixtures::two_node_graph();
+    let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
     let compiled = compile(&pipeline, &nodes, &edges, &fixture_library(), &project()).unwrap();
     let repo = tempfile::tempdir().unwrap();
     std::fs::write(repo.path().join(".gitignore"), "target/\n").unwrap();
@@ -175,7 +179,7 @@ fn write_to_repo_lands_files_and_maintains_gitignore_block() {
 #[test]
 fn block_collapse_state_never_enters_the_hash() {
     use surge_domain::pipeline::{Node, NodeConfig};
-    let (_, mut nodes, edges) = fixtures::two_node_pipeline();
+    let (mut nodes, edges) = fixtures::two_node_graph();
     let block = |collapsed: bool| Node {
         id: "nd_block".into(),
         pipeline_id: "pl_two_node_v1".into(),
