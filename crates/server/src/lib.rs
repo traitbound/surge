@@ -35,6 +35,23 @@ impl AppState {
     }
 }
 
+/// Actor string for an audit row, derived from an identity: `human`,
+/// `rt:<project>` (project-scoped runtime token), or `rt:<project>:<run>`
+/// (run-bound runtime token, INV-AUTH-4). Shared between `auth`'s boundary
+/// refusals and `runtime_api`'s scope refusals so every audit row derives
+/// its actor from the same place — a copy here previously let one refusal
+/// path format the actor without its run_id while the other kept it (walk-6
+/// R3; the sharing itself guards the walk-3 N1/N6/N13 defect of copying this
+/// kind of derivation).
+pub(crate) fn actor_of(identity: &surge_store::tokens::Identity) -> String {
+    use surge_store::tokens::Identity;
+    match identity {
+        Identity::Human => "human".to_string(),
+        Identity::Runtime { project_id, run_id: None } => format!("rt:{project_id}"),
+        Identity::Runtime { project_id, run_id: Some(run) } => format!("rt:{project_id}:{run}"),
+    }
+}
+
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

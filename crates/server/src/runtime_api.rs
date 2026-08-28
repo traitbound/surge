@@ -57,14 +57,6 @@ fn internal(e: anyhow::Error, what: &str) -> Response {
         .into_response()
 }
 
-fn actor_of(identity: &Identity) -> String {
-    match identity {
-        Identity::Human => "human".to_string(),
-        Identity::Runtime { project_id, run_id: None } => format!("rt:{project_id}"),
-        Identity::Runtime { project_id, run_id: Some(run) } => format!("rt:{project_id}:{run}"),
-    }
-}
-
 /// One refusal, one audit row, one reason string the caller can read. The
 /// audit subject carries the path *and* the reason, so the trail says what
 /// was refused and why without a second lookup (INV-ERR-1).
@@ -81,7 +73,7 @@ async fn refuse(
         &state.pool,
         action,
         &format!("{path} — {reason}"),
-        &actor_of(identity),
+        &crate::actor_of(identity),
         project_id,
         now_ms(),
     )

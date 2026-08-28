@@ -33,10 +33,34 @@ fn refusal(status: StatusCode, reason: &str) -> Response {
     (status, Json(serde_json::json!({ "error": reason }))).into_response()
 }
 
-async fn audit_refusal(state: &AppState, action: &str, path: &str, actor: &str, project_id: Option<&str>) {
+/// One refusal, one audit row. `actor` and `project_id` are derived from
+/// `identity` via the shared [`crate::actor_of`] rather than received
+/// piecemeal, so a call site can never spell — and so drop — one field of an
+/// identity it already has in hand (walk-6 R3: `require_human` used to
+/// destructure `project_id` out of `Identity::Runtime { project_id, .. }`
+/// and hand-format the actor, silently discarding `run_id`). `identity:
+/// None` is reserved for the genuine case where no identity is in scope at
+/// all — an expired or unknown token never resolved to one.
+///
+/// The subject carries the path *and* the reason, matching
+/// `runtime_api::refuse`, so the trail says what was refused and why
+/// without a second lookup (INV-ERR-1).
+async fn audit_refusal(
+    state: &AppState,
+    action: &str,
+    path: &str,
+    reason: &str,
+    identity: Option<&Identity>,
+) {
+    let actor = identity.map(crate::actor_of).unwrap_or_else(|| "unknown".to_string());
+    let project_id = identity.and_then(|id| match id {
+        Identity::Runtime { project_id, .. } => Some(project_id.as_str()),
+        Identity::Human => None,
+    });
+    let subject = format!("{path} — {reason}");
     // The refusal must still land even if auditing fails; log loudly instead.
     if let Err(e) =
-        surge_store::audit::record(&state.pool, action, path, actor, project_id, now_ms()).await
+        surge_store::audit::record(&state.pool, action, &subject, &actor, project_id, now_ms()).await
     {
         eprintln!("AUDIT WRITE FAILED for {action} on {path}: {e}");
     }
@@ -55,14 +79,14 @@ async fn identify(state: &AppState, token: Option<String>, path: &str) -> Result
             // Named apart from "invalid" so an operator whose project runtime
             // token aged out is told what actually happened (INV-ERR-1; the
             // expiry itself is F1's fix).
-            audit_refusal(state, "auth.expired_token", path, "unknown", None).await;
+            audit_refusal(state, "auth.expired_token", path, "token expired", None).await;
             Err(refusal(
                 StatusCode::UNAUTHORIZED,
                 "token expired — mint a fresh project runtime token (Settings → API TOKENS)",
             ))
         }
         Ok(TokenLookup::Unknown) => {
-            audit_refusal(state, "auth.invalid_token", path, "unknown", None).await;
+            audit_refusal(state, "auth.invalid_token", path, "invalid or revoked token", None).await;
             Err(refusal(StatusCode::UNAUTHORIZED, "invalid or revoked token"))
         }
         Err(e) => {
@@ -82,15 +106,16 @@ pub async fn require_human(
     match identify(&state, token, &path).await {
         Err(resp) => resp,
         Ok(None) => refusal(StatusCode::UNAUTHORIZED, "authentication required"),
-        Ok(Some(Identity::Runtime { project_id, .. })) => {
-            // INV-AUTH-2: refused loudly, never silently dropped.
-            let actor = format!("rt:{project_id}");
+        Ok(Some(identity @ Identity::Runtime { .. })) => {
+            // INV-AUTH-2: refused loudly, never silently dropped. The whole
+            // identity is passed through — not just `project_id` — so a
+            // run-bound token's `run_id` lands in the actor too.
             audit_refusal(
                 &state,
                 "auth.runtime_refused_privileged",
                 &path,
-                &actor,
-                Some(&project_id),
+                "runtime token refused at privileged endpoint",
+                Some(&identity),
             )
             .await;
             refusal(

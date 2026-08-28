@@ -62,6 +62,15 @@ async fn audit_entry(pool: &sqlx::SqlitePool, action: &str) -> surge_domain::aud
         .unwrap_or_else(|| panic!("no audit row for action {action}"))
 }
 
+async fn audit_entries(pool: &sqlx::SqlitePool, action: &str) -> Vec<surge_domain::audit::AuditEntry> {
+    surge_store::audit::recent(pool, 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.action == action)
+        .collect()
+}
+
 #[tokio::test]
 async fn claim_is_one_time_and_mints_a_session() {
     let state = test_state().await;
@@ -146,7 +155,9 @@ async fn the_capability_gap_is_enforced_and_audited() {
 /// same non-NULL project_id its sibling `auth.runtime_refused_scope` rows
 /// write, so an operator filtering the audit trail by project sees boundary
 /// violations against that project. `auth.invalid_token` has no identity to
-/// draw a project from and must keep its NULL project_id.
+/// draw a project from and must keep its NULL project_id. And a run-bound
+/// token (INV-AUTH-4) must keep its run_id in the actor too — the row must
+/// be traceable to the run that violated the boundary, not just the project.
 #[tokio::test]
 async fn runtime_refused_privileged_audit_carries_project_id() {
     let state = test_state().await;
@@ -166,9 +177,42 @@ async fn runtime_refused_privileged_audit_carries_project_id() {
     assert_eq!(r.status(), StatusCode::OK);
     let rt = body_json(r).await["token"].as_str().unwrap().to_string();
 
-    // The runtime token at a privileged endpoint → 403, audited with prj_a.
+    // The project-scoped runtime token at a privileged endpoint → 403,
+    // audited with prj_a and actor "rt:prj_a".
     let r = router.clone()
         .oneshot(req("POST", "/api/projects/prj_a/runtime-token", Some(&rt), None))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+
+    // A run-bound runtime token (a real supervisor-spawned worker,
+    // INV-AUTH-4) does the same thing — its audit row must carry the run,
+    // not just the project. `token.run_id` is a foreign key, so the run has
+    // to exist first.
+    let run = surge_domain::observatory::Run {
+        id: "run_a".into(),
+        project_id: "prj_a".into(),
+        issue_id: None,
+        kind: surge_domain::observatory::RunKind::Doc,
+        materialization_hash: "sha256:mat".into(),
+        work_order_hash: None,
+        status: surge_domain::observatory::RunStatus::Running,
+        started_at: 1_000,
+        ended_at: None,
+        cost: 0.0,
+    };
+    surge_store::observatory::insert_run(&state.pool, &run).await.unwrap();
+    let rt_run = surge_store::tokens::mint_for_run(
+        &state.pool,
+        TokenKind::Runtime,
+        Some("prj_a"),
+        Some("run_a"),
+        1,
+    )
+    .await
+    .unwrap();
+    let r = router.clone()
+        .oneshot(req("POST", "/api/projects/prj_a/runtime-token", Some(&rt_run), None))
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::FORBIDDEN);
@@ -177,8 +221,15 @@ async fn runtime_refused_privileged_audit_carries_project_id() {
     let r = router.clone().oneshot(req("GET", "/api/audit", Some("st_forged"), None)).await.unwrap();
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
 
-    let privileged = audit_entry(&state.pool, "auth.runtime_refused_privileged").await;
-    assert_eq!(privileged.project_id.as_deref(), Some("prj_a"));
+    let privileged = audit_entries(&state.pool, "auth.runtime_refused_privileged").await;
+    assert_eq!(privileged.len(), 2);
+    assert!(privileged.iter().all(|e| e.project_id.as_deref() == Some("prj_a")));
+    assert!(privileged.iter().any(|e| e.actor == "rt:prj_a"));
+    assert!(
+        privileged.iter().any(|e| e.actor == "rt:prj_a:run_a"),
+        "run-bound refusal must keep its run_id in the actor, got: {:?}",
+        privileged.iter().map(|e| &e.actor).collect::<Vec<_>>()
+    );
 
     let invalid = audit_entry(&state.pool, "auth.invalid_token").await;
     assert_eq!(invalid.project_id, None);
