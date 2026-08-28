@@ -27,22 +27,22 @@ One row per Layer 4 feature spec.
 
 ## Phase 1 — Author: canvas & library
 
-Spec sprint not yet run. Twelve anticipated specs is over the rescope threshold — `/halfcycle:phase-rescope` runs before `/halfcycle:spec-sprint` (see the phase doc).
+**Split into three epics 2026-08-28** (`/halfcycle:phase-rescope`; three of four diagnostic questions fired — see `docs/phases/phase-1/phase.md`). Spec sprint not yet run; it runs per epic, starting with phase-1.1.
 
 | Feature | Spec | Phase | Status |
 |---|---|---|---|
-| canvas-editor | — | phase-1 | planned |
-| blocks-and-groups | — | phase-1 | planned |
-| code-roundtrip | — | phase-1 | planned |
-| pipeline-versioning | — | phase-1 | planned |
-| library-store | — | phase-1 | planned |
-| trust-and-import | — | phase-1 | planned |
-| compile-dialog | — | phase-1 | planned |
-| upgrade-review | — | phase-1 | planned |
-| pipelines-pages | — | phase-1 | planned |
-| project-overview | — | phase-1 | planned |
-| canvas-modes | — | phase-1 | planned |
-| default-library | — | phase-1 | planned |
+| canvas-editor | — | phase-1.1 | planned |
+| code-roundtrip | — | phase-1.1 | planned |
+| pipeline-versioning | — | phase-1.1 | planned |
+| library-store | — | phase-1.2 | planned |
+| trust-and-import | — | phase-1.2 | planned |
+| compile-dialog | — | phase-1.2 | planned |
+| upgrade-review | — | phase-1.2 | planned |
+| default-library | — | phase-1.2 | planned |
+| pipelines-pages | — | phase-1.3 | planned |
+| project-overview | — | phase-1.3 | planned |
+| canvas-modes | — | phase-1.3 | planned |
+| blocks-and-groups | — | phase-1.3 | planned |
 
 ## Phase 2 · Phase 3
 

@@ -16,8 +16,41 @@
     {
       "id": "phase-1",
       "name": "Author: canvas & library",
+      "status": "split",
+      "doc": "phase-1/phase.md",
+      "note": "split into three epics 2026-08-28 (/halfcycle:phase-rescope); this doc is the overview",
+      "epics": [
+        "phase-1.1",
+        "phase-1.2",
+        "phase-1.3"
+      ]
+    },
+    {
+      "id": "phase-1.1",
+      "name": "The faithful canvas",
       "status": "next",
-      "doc": "phase-1/phase.md"
+      "doc": "phase-1.1/phase.md",
+      "parent": "phase-1",
+      "specs": 3,
+      "note": "load-bearing epic \u2014 canvas<->code hash fidelity; runs first"
+    },
+    {
+      "id": "phase-1.2",
+      "name": "Library, trust and compile governance",
+      "status": "not_started",
+      "doc": "phase-1.2/phase.md",
+      "parent": "phase-1",
+      "specs": 5,
+      "note": "depends on phase-1.1"
+    },
+    {
+      "id": "phase-1.3",
+      "name": "Authoring surfaces",
+      "status": "not_started",
+      "doc": "phase-1.3/phase.md",
+      "parent": "phase-1",
+      "specs": 4,
+      "note": "depends on phase-1.1 and phase-1.2; the cut buffer if phase 1 slips"
     },
     {
       "id": "phase-2",

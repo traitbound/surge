@@ -25,7 +25,7 @@ Decided 2026-08-08 — this section records the **decisions**, not what is built
 - `docs/product/architecture.md` — container diagram + ADRs
 - `docs/product/invariants.md` — INV-* rows; binding on all specs and code
 - `docs/product/code-map.md` — area → path → safe-parallel rules
-- `docs/features/INDEX.md` · `docs/phases/` — Layer 4/5 artefacts (empty until phase scoping)
+- `docs/features/INDEX.md` · `docs/phases/` — Layer 4/5 artefacts. Phase 0 is **accepted** (walk 7, with stated exceptions); phase 1 is **split into three epics** (`phase-1.1` … `phase-1.3`), each a full execution unit with its own `phase.md`, taskgraph and state — `docs/phases/phase-1/phase.md` is the overview, not a scope doc
 - `docs/design.md` — V3 page-by-page UI spec, the behavioural authority (§23 holds resolutions)
 - `ENGAGEMENT.md` — operational decisions (project type, repo shape, push/branch policy, ceremony tier)
 - `.halfcycle.json` — machine-readable projection of ENGAGEMENT decisions

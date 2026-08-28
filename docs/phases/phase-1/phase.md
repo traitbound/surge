@@ -1,51 +1,59 @@
-# Phase 1 — Author: canvas & library
+# Phase 1 — Author: canvas & library (overview)
 
-**Status:** not_started
+**Status:** not_started — **split into three epics 2026-08-28** (`/halfcycle:phase-rescope`). This file is the overview; each epic below is a full execution unit with its own scope, `Done when`, taskgraph, orchestration state and COE.
 **Commitment level:** Phase 1 — ships to the operator.
-**Time horizon:** ~4–5 weeks — flagged optimistic (2026-08-12): React Flow blocks with exposed parameters *plus* hash-faithful two-way code sync is the least defensible estimate in the plan; if it slips, cut blocks/grouping to a later phase before cutting round-trip fidelity.
+**Time horizon:** ~4–5 weeks total.
 
 ## Purpose
 
 Make pipelines and library items *authorable* instead of data-defined: the React Flow canvas with all six node kinds, versioning (fork-never-edit), and the trust-gated library. Tests the second-biggest assumption: that the graph editor can stay faithful to the compiled artifact — what you draw is exactly what materializes (same hash inputs).
 
-## In scope
+## The epics
 
-1. Pipeline editor: React Flow canvas, six node kinds, edges with triggers and required-gate locks, multi-select, grouping/blocks with exposed parameters, undo/redo (design §11).
-2. Two-way code sync: canvas ⇄ textual pipeline representation (the Phase 0 data format becomes the paste/round-trip format). Hash inputs per INV-ID-2: semantic content only, presentation state never hashed.
-3. Pipeline versioning: fork with provenance, version history with diff, blessed flag (INV-DATA-3); project-local edits create a local revision hash immediately, promote-to-fork adopts it (INV-ID-3, design §23-Nine).
-4. Library: Hooks · Subagents · Skills tabs, immutable-per-version publish flow, drafts (INV-DATA-2).
-5. Trust flow: imports land untrusted, red banner, Mark reviewed, compile hard-block naming untrusted items (INV-AUTH-3).
-6. Compile dialog with the four-line capability report (writes · shell · network · egress) and signature line (design §04).
-7. Upgrade review dialog for bumping pinned library versions (design §23-Two).
-8. **Pipelines page** (design §09): filter rail, card grid, and the detail view — composition tables, version history with diff, materializations list, broken-reference states. The upgrade-review dialog (7) launches from this page's composition table. Includes the assign-pipeline dialog and reassignment semantics ("fetched at the next session start", design §18).
-9. **Project·Overview** (design §12): binding/subagents/hooks cards, assignment card with the stale box, docs chips (data-only until the Phase 3 Docs surface), recent runs.
-10. **Canvas modes, first two**: dry run (topological walk, cost estimate, gate callouts) and the builder diff overlay (design §11). Run overlay → Phase 2; debugger → Phase 3.
-11. **Inspector EVAL tab** in its disclaimed deterministic form, plus the context-budget bars (design §11); real evals and calibration stay post-V3.
-12. **Default library, full set**: the normative seven hooks · six subagents · seven skills backing the doc chain (design §03/§10), authored and published through the library surfaces this phase builds — on the Phase 0 seed.
+Execution order is dependency order; the load-bearing epic is first.
 
-## Out of scope
+| Epic | Name | Specs | Thesis |
+|---|---|---|---|
+| [phase-1.1](../phase-1.1/phase.md) | The faithful canvas | 3 | What you draw is exactly what materializes |
+| [phase-1.2](../phase-1.2/phase.md) | Library, trust and compile governance | 5 | Nothing compiles that has not been reviewed, and the capability report tells the truth |
+| [phase-1.3](../phase-1.3/phase.md) | Authoring surfaces | 4 | The operator can see, navigate and reason about what they authored |
+
+## Why this split (the four-question diagnostic, 2026-08-28)
+
+Three of four fired. Recorded because "twelve specs" alone would **not** have justified a split — task count is a batch, not an epic.
+
+1. **Natural demo points separated by weeks of work? — YES.** "A pipeline drawn from scratch compiles to the same hash as its pasted textual form" is demonstrable with the canvas and round-trip alone: no library surfaces, no pipelines page, no overview. "Import an untrusted skill → compile refused naming it → mark reviewed → compiles, and the capability report matches the graph" is a second, independent demo weeks later.
+2. **One part load-bearing and risky enough to prove first? — YES.** The phase's own Purpose names canvas↔code hash fidelity as the assumption under test, and the original time-horizon note flagged blocks-plus-round-trip as "the least defensible estimate in the plan". Everything else in the phase consumes an editable, versioned pipeline object; nothing else can be trusted until the hash contract holds. It becomes phase-1.1 and runs first.
+3. **Independent dependency subgraphs? — PARTIAL, not counted as a yes.** Authoring mechanics and library governance are largely separable, but the seam is not clean: `upgrade-review` straddles the library and the pipelines page, and `pipeline-versioning` is consumed by both the canvas (local revision hash on edit) and the surfaces (history/diff). The split below cuts along the cleaner seam and accepts that 1.3 consumes both predecessors.
+4. **Design thinking already converged? — YES.** The 2026-08-23 coverage audit recorded an expected split of "editor epic vs. surfaces epic". This split honours that seam and refines it: library/trust governance is separated from presentation surfaces, because trust is an enforcement boundary (INV-AUTH-3) and the pages are not.
+
+**One deliberate departure from the recorded expectation.** `blocks-and-groups` moves *out* of the editor epic and into 1.3. The original phase doc says: "if it slips, cut blocks/grouping to a later phase before cutting round-trip fidelity." A thing named as the first candidate to cut must not sit inside the load-bearing epic, or cutting it means reopening the epic that proves the thesis. Putting it in the last epic makes the intended cut a no-op on 1.1 and 1.2.
+
+## Overall `Done when` (the parent's bar; each epic carries its own slice)
+
+- A pipeline drawn from scratch on the canvas compiles to the same hash as its pasted textual form (canvas↔code fidelity per INV-ID-2 — moving nodes or adding stickies changes no hash). *(1.1)*
+- Editing a project canvas immediately shows `vN + local rev <hash>` on the assignment line; promote-to-fork names that revision as the fork's provenance (INV-ID-3). *(1.1)*
+- Forking a blessed template, editing the fork and compiling leaves the template's hash and history untouched. *(1.1)*
+- Importing a skill marks it untrusted; compile of a referencing pipeline is refused naming it; Mark reviewed unblocks; every step audit-logged. *(1.2)*
+- Bumping a pinned library version runs the upgrade review dialog (diff + affected nodes) and produces a new pipeline version. *(1.2)*
+- The capability report lines match the graph: adding a stage node changes the shell line; granting WebSearch changes the network line. *(1.2)*
+
+Phase 1 is complete when all three epics are accepted. 1.3 carries no parent `Done when` line of its own — it is presentation over 1.1 and 1.2's guarantees — so its acceptance bar lives in its own doc.
+
+## Out of scope (whole phase)
 
 - Board·Plan mirror, tracker connections → Phase 2
 - Board·Ops, work orders, gates on issues, dispatch queue → Phase 2
 - Wave integration, budgets, aborts → Phase 2
 - SSE, heartbeat live-lines, toasts beyond basics → Phase 2
-- Observatory waterfall, COE, ratchet, metrics, replay, debugger → Phase 3 (the EVAL panel's disclaimed form ships here — in-scope 11)
+- Observatory waterfall, COE, ratchet, metrics, replay, debugger → Phase 3 (the EVAL panel's disclaimed form ships in 1.3)
 - Retention/compaction → Phase 3
 - Settings surfaces, backup/restore, token rotation UI, egress allowlist editor → Phase 3 (egress *data* exists for the capability report)
 - Frames/stickies round-trip fidelity — explicitly deferred; known-lossy per design §23 "Designed but not wired"
 
-## Done when
+## Architecture (whole phase)
 
-- A pipeline drawn from scratch on the canvas compiles to the same hash as its pasted textual form (canvas↔code fidelity per INV-ID-2 — moving nodes or adding stickies changes no hash).
-- Editing a project canvas immediately shows `vN + local rev <hash>` on the assignment line; promote-to-fork names that revision as the fork's provenance (INV-ID-3).
-- Forking a blessed template, editing the fork and compiling leaves the template's hash and history untouched.
-- Importing a skill marks it untrusted; compile of a referencing pipeline is refused naming it; Mark reviewed unblocks; every step audit-logged.
-- Bumping a pinned library version runs the upgrade review dialog (diff + affected nodes) and produces a new pipeline version.
-- The capability report lines match the graph: adding a stage node changes the shell line; granting WebSearch changes the network line.
-
-## Architecture (this phase)
-
-Superset of Phase 0 (same containers, supervisor still single-task; the UI grows the canvas/library surfaces). Still no dispatch queue, repo I/O reads, mirror or SSE.
+Superset of Phase 0 (same containers, supervisor still single-task; the UI grows the canvas/library surfaces). Still no dispatch queue, repo I/O reads, mirror or SSE. Each epic's doc carries the strict subset it ships.
 
 ```mermaid
 graph TB
@@ -74,26 +82,7 @@ graph TB
     compiler -->|"writes compiled files"| repo
 ```
 
-## Anticipated specs
+## Scoping assumptions (whole phase)
 
-| Feature | Hint |
-|---|---|
-| canvas-editor | React Flow, node kinds, edges/gates, selection, undo/redo |
-| blocks-and-groups | composite nodes, palette publish, exposed parameters |
-| code-roundtrip | canvas ⇄ text format, hash-fidelity contract |
-| pipeline-versioning | fork, provenance, history, diff, blessed flag |
-| library-store | items, drafts, publish vN+1, pinning |
-| trust-and-import | untrusted state, review flow, compile hard-block |
-| compile-dialog | capability report computation + signature |
-| upgrade-review | pinned-version bump dialog, affected-node list |
-| pipelines-pages | §09 list + detail (composition, history/diff, materializations, broken refs), assign dialog |
-| project-overview | §12 two-column health page, cross-surface jumps |
-| canvas-modes | dry run walk + builder diff overlay; EVAL tab disclaimed panel + context-budget bars |
-| default-library | the normative 7·6·7 item set backing the doc chain, authored on the Phase 0 seed |
-
-Twelve specs — over the rescope threshold (grown by the 2026-08-23 coverage audit: §09/§12 surfaces, two canvas modes, the EVAL panel and the default library previously had no owner). Run `/halfcycle:phase-rescope` before the spec sprint; expected split if needed: editor epic (canvas, blocks, round-trip, modes) vs. surfaces epic (pipelines pages, overview, library, trust, dialogs).
-
-## Scoping assumptions
-
-- scoping assumption — verify at spec time: React Flow's grouping/sub-flow support can express collapsible blocks with exposed parameters without a custom layout engine.
-- scoping assumption — verify at spec time: the Phase 0 pipeline data format is expressive enough to be the round-trip format (canvas-only state — positions, frames, stickies — is excluded from the hash by INV-ID-2, so lossiness there cannot break fidelity).
+- verify at spec time: React Flow's grouping/sub-flow support can express collapsible blocks with exposed parameters without a custom layout engine. *(1.3)*
+- verify at spec time: the Phase 0 pipeline data format is expressive enough to be the round-trip format (canvas-only state — positions, frames, stickies — is excluded from the hash by INV-ID-2, so lossiness there cannot break fidelity). *(1.1)*
