@@ -1,8 +1,14 @@
 //! INV-ID-2, executable: the pipeline content hash covers semantic content
-//! only — nodes (kind, config, gates, fanout), edges (endpoints, triggers,
-//! gate flags), pinned library references (inside config). Presentation state
-//! (positions, labels, metric annotations) never enters the hash. Two graphs
-//! that execute identically must hash identically.
+//! only — nodes (**id**, kind, config, gates, fanout), edges (**id**,
+//! endpoints, triggers, gate flags), pinned library references (inside
+//! config). Presentation state (positions, labels, collapse state, and the
+//! observability fields `emits_span`/`metric_binding`/`metric_note`) never
+//! enters the hash. Two graphs that execute identically *and name the same
+//! nodes* must hash identically — ids are hash inputs, so a consistently
+//! renamed graph is a different pipeline by design (INV-ID-2 amendment,
+//! 2026-08-28). Prompt bodies are NOT covered here: they reach identity
+//! through the pinned `LibraryRef` plus INV-DATA-2 immutability, and
+//! directly in [`materialization_hash`], which covers emitted bytes.
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};

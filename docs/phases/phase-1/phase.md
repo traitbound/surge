@@ -31,7 +31,7 @@ Three of four fired. Recorded because "twelve specs" alone would **not** have ju
 
 ## Overall `Done when` (the parent's bar; each epic carries its own slice)
 
-- A pipeline drawn from scratch on the canvas compiles to the same hash as its pasted textual form (canvas↔code fidelity per INV-ID-2 — moving nodes or adding stickies changes no hash). *(1.1)*
+- A pipeline exported to text and pasted back round-trips to the same hash (canvas↔code fidelity per INV-ID-2 — moving a node or renaming its label changes no hash). *(1.1)* *(Amended 2026-08-28 — see phase-1.1's Done-when for why "drawn from scratch" was false and why frames/stickies left this line.)*
 - Editing a project canvas immediately shows `vN + local rev <hash>` on the assignment line; promote-to-fork names that revision as the fork's provenance (INV-ID-3). *(1.1)*
 - Forking a blessed template, editing the fork and compiling leaves the template's hash and history untouched. *(1.1)*
 - Importing a skill marks it untrusted; compile of a referencing pipeline is refused naming it; Mark reviewed unblocks; every step audit-logged. *(1.2)*
