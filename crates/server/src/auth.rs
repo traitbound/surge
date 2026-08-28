@@ -33,9 +33,10 @@ fn refusal(status: StatusCode, reason: &str) -> Response {
     (status, Json(serde_json::json!({ "error": reason }))).into_response()
 }
 
-async fn audit_refusal(state: &AppState, action: &str, path: &str, actor: &str) {
+async fn audit_refusal(state: &AppState, action: &str, path: &str, actor: &str, project_id: Option<&str>) {
     // The refusal must still land even if auditing fails; log loudly instead.
-    if let Err(e) = surge_store::audit::record(&state.pool, action, path, actor, None, now_ms()).await
+    if let Err(e) =
+        surge_store::audit::record(&state.pool, action, path, actor, project_id, now_ms()).await
     {
         eprintln!("AUDIT WRITE FAILED for {action} on {path}: {e}");
     }
@@ -54,14 +55,14 @@ async fn identify(state: &AppState, token: Option<String>, path: &str) -> Result
             // Named apart from "invalid" so an operator whose project runtime
             // token aged out is told what actually happened (INV-ERR-1; the
             // expiry itself is F1's fix).
-            audit_refusal(state, "auth.expired_token", path, "unknown").await;
+            audit_refusal(state, "auth.expired_token", path, "unknown", None).await;
             Err(refusal(
                 StatusCode::UNAUTHORIZED,
                 "token expired — mint a fresh project runtime token (Settings → API TOKENS)",
             ))
         }
         Ok(TokenLookup::Unknown) => {
-            audit_refusal(state, "auth.invalid_token", path, "unknown").await;
+            audit_refusal(state, "auth.invalid_token", path, "unknown", None).await;
             Err(refusal(StatusCode::UNAUTHORIZED, "invalid or revoked token"))
         }
         Err(e) => {
@@ -84,7 +85,14 @@ pub async fn require_human(
         Ok(Some(Identity::Runtime { project_id, .. })) => {
             // INV-AUTH-2: refused loudly, never silently dropped.
             let actor = format!("rt:{project_id}");
-            audit_refusal(&state, "auth.runtime_refused_privileged", &path, &actor).await;
+            audit_refusal(
+                &state,
+                "auth.runtime_refused_privileged",
+                &path,
+                &actor,
+                Some(&project_id),
+            )
+            .await;
             refusal(
                 StatusCode::FORBIDDEN,
                 "runtime token refused at privileged endpoint (audited)",

@@ -53,6 +53,15 @@ async fn audit_actions(pool: &sqlx::SqlitePool) -> Vec<String> {
         .collect()
 }
 
+async fn audit_entry(pool: &sqlx::SqlitePool, action: &str) -> surge_domain::audit::AuditEntry {
+    surge_store::audit::recent(pool, 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.action == action)
+        .unwrap_or_else(|| panic!("no audit row for action {action}"))
+}
+
 #[tokio::test]
 async fn claim_is_one_time_and_mints_a_session() {
     let state = test_state().await;
@@ -131,6 +140,48 @@ async fn the_capability_gap_is_enforced_and_audited() {
     let actions = audit_actions(&state.pool).await;
     assert!(actions.contains(&"auth.runtime_refused_privileged".to_string()));
     assert!(actions.contains(&"auth.invalid_token".to_string()));
+}
+
+/// Smoke walk 6 finding R3: `auth.runtime_refused_privileged` must carry the
+/// same non-NULL project_id its sibling `auth.runtime_refused_scope` rows
+/// write, so an operator filtering the audit trail by project sees boundary
+/// violations against that project. `auth.invalid_token` has no identity to
+/// draw a project from and must keep its NULL project_id.
+#[tokio::test]
+async fn runtime_refused_privileged_audit_carries_project_id() {
+    let state = test_state().await;
+    let session = surge_store::tokens::mint(&state.pool, TokenKind::Session, None, 1).await.unwrap();
+    let router = app(state.clone());
+
+    let r = router.clone()
+        .oneshot(req("POST", "/api/projects", Some(&session),
+            Some(serde_json::json!({"id": "prj_a", "name": "a", "repo_path": "/tmp/a"}))))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let r = router.clone()
+        .oneshot(req("POST", "/api/projects/prj_a/runtime-token", Some(&session), None))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let rt = body_json(r).await["token"].as_str().unwrap().to_string();
+
+    // The runtime token at a privileged endpoint → 403, audited with prj_a.
+    let r = router.clone()
+        .oneshot(req("POST", "/api/projects/prj_a/runtime-token", Some(&rt), None))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+
+    // An invalid token has no identity to draw a project from.
+    let r = router.clone().oneshot(req("GET", "/api/audit", Some("st_forged"), None)).await.unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+
+    let privileged = audit_entry(&state.pool, "auth.runtime_refused_privileged").await;
+    assert_eq!(privileged.project_id.as_deref(), Some("prj_a"));
+
+    let invalid = audit_entry(&state.pool, "auth.invalid_token").await;
+    assert_eq!(invalid.project_id, None);
 }
 
 #[tokio::test]
