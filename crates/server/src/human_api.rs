@@ -86,7 +86,9 @@ async fn create_project(
         name: body.name,
         repo_path: body.repo_path,
         assigned_pipeline: None,
-        pipeline_status: surge_domain::project::PipelineAssignmentStatus::Published,
+        // Ignored on write and recomputed on read (ESC-3); the response below
+        // is the stored row, not this value.
+        pipeline_status: surge_domain::project::PipelineAssignmentStatus::NotCompiled,
         surge_yaml_written: false,
         tracker: surge_domain::project::TrackerKind::None,
         branch_format: "task/{issue}".into(),
@@ -107,7 +109,14 @@ async fn create_project(
     {
         return internal(e, "audit write failed");
     }
-    (StatusCode::CREATED, Json(project)).into_response()
+    // Answer with what the store actually holds: `pipeline_status` is derived
+    // from materialization freshness (ESC-3), so a hand-built response body
+    // would be the one place that could still assert an unearned status.
+    match surge_store::projects::get(&state.pool, &project.id).await {
+        Ok(Some(p)) => (StatusCode::CREATED, Json(p)).into_response(),
+        Ok(None) => internal(anyhow::anyhow!("project vanished after insert"), "project insert failed"),
+        Err(e) => internal(e, "project read-back failed"),
+    }
 }
 
 /// Bind the project to its repo: write the `surge.yaml` base file into

@@ -1,10 +1,22 @@
 //! Project repository — project rows scope runtime tokens; binding
 //! (`surge.yaml` written into the repo, INV-DATA-1) is recorded on the row via
 //! [`mark_surge_yaml_written`].
+//!
+//! `Project::pipeline_status` is **derived here, not stored** (ESC-3): the read
+//! paths compute it from `materialization.fresh`, the same signal
+//! `supervisor::dispatch_issue` gates on (INV-ID-1), so the badge and the
+//! dispatch decision cannot disagree. The `project.pipeline_status` column from
+//! migration 0002 has never had a writer and is now read by nothing either; it
+//! stays until a migration that rebuilds `project` for another reason removes
+//! it (SQLite refuses `DROP COLUMN` on a column named in a CHECK constraint, so
+//! dropping it alone means a full table rebuild).
 
 use sqlx::SqlitePool;
 use surge_domain::project::{Project, TrackerKind};
 
+/// Insert a project row. `p.pipeline_status` is not persisted — it is derived
+/// on every read (see the module note); a caller cannot assert a project into
+/// a compiled state.
 pub async fn insert(pool: &SqlitePool, p: &Project) -> anyhow::Result<()> {
     anyhow::ensure!(
         p.assigned_pipeline.is_none(),
@@ -55,12 +67,15 @@ pub async fn exists(pool: &SqlitePool, id: &str) -> anyhow::Result<bool> {
 
 /// Shared row → entity mapping for the read paths. Assignment modelling lands
 /// with the compiler/assignment tasks, so `assigned_pipeline` is `None`.
+///
+/// `has_fresh_materialization` comes from the row's `EXISTS` subquery, so the
+/// status is a fact about the store at read time rather than a remembered one.
 #[allow(clippy::too_many_arguments)]
 fn project_from(
     id: String,
     name: String,
     repo_path: String,
-    pipeline_status: String,
+    has_fresh_materialization: bool,
     surge_yaml_written: i64,
     tracker: String,
     branch_format: String,
@@ -71,9 +86,10 @@ fn project_from(
         name,
         repo_path,
         assigned_pipeline: None,
-        pipeline_status: match pipeline_status.as_str() {
-            "stale" => surge_domain::project::PipelineAssignmentStatus::Stale,
-            _ => surge_domain::project::PipelineAssignmentStatus::Published,
+        pipeline_status: if has_fresh_materialization {
+            surge_domain::project::PipelineAssignmentStatus::Published
+        } else {
+            surge_domain::project::PipelineAssignmentStatus::NotCompiled
         },
         surge_yaml_written: surge_yaml_written != 0,
         tracker: match tracker.as_str() {
@@ -89,8 +105,10 @@ fn project_from(
 
 pub async fn get(pool: &SqlitePool, id: &str) -> anyhow::Result<Option<Project>> {
     let row = sqlx::query!(
-        "SELECT id, name, repo_path, pipeline_status, surge_yaml_written, tracker,
-                branch_format, created_at
+        "SELECT id, name, repo_path, surge_yaml_written, tracker,
+                branch_format, created_at,
+                EXISTS(SELECT 1 FROM materialization m
+                       WHERE m.project_id = project.id AND m.fresh = 1) AS has_fresh
          FROM project WHERE id = ?",
         id
     )
@@ -101,7 +119,7 @@ pub async fn get(pool: &SqlitePool, id: &str) -> anyhow::Result<Option<Project>>
             r.id,
             r.name,
             r.repo_path,
-            r.pipeline_status,
+            r.has_fresh != 0,
             r.surge_yaml_written,
             r.tracker,
             r.branch_format,
@@ -113,8 +131,10 @@ pub async fn get(pool: &SqlitePool, id: &str) -> anyhow::Result<Option<Project>>
 /// Every bound project, newest first — the Registry's card grid.
 pub async fn list(pool: &SqlitePool) -> anyhow::Result<Vec<Project>> {
     let rows = sqlx::query!(
-        "SELECT id, name, repo_path, pipeline_status, surge_yaml_written, tracker,
-                branch_format, created_at
+        "SELECT id, name, repo_path, surge_yaml_written, tracker,
+                branch_format, created_at,
+                EXISTS(SELECT 1 FROM materialization m
+                       WHERE m.project_id = project.id AND m.fresh = 1) AS has_fresh
          FROM project ORDER BY created_at DESC, id"
     )
     .fetch_all(pool)
@@ -126,7 +146,7 @@ pub async fn list(pool: &SqlitePool) -> anyhow::Result<Vec<Project>> {
                 r.id,
                 r.name,
                 r.repo_path,
-                r.pipeline_status,
+                r.has_fresh != 0,
                 r.surge_yaml_written,
                 r.tracker,
                 r.branch_format,

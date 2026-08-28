@@ -256,8 +256,11 @@ function ProjectCard({
     <div className="project-card">
       <div className="title-row">
         <span className="name">{project.name}</span>
-        {project.pipeline_status === "stale" ? (
-          <span className="pill warn">stale materialization</span>
+        {project.pipeline_status === "not_compiled" ? (
+          // Not "stale": the server derives this from materialization
+          // freshness, and the only way to have none is never to have compiled
+          // (ESC-3). Dispatch is refused in this state (INV-ID-1).
+          <span className="pill warn">not compiled</span>
         ) : (
           <span className="badge">{project.surge_yaml_written ? "surge.yaml" : "unbound repo"}</span>
         )}
