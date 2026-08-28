@@ -834,3 +834,55 @@ async fn abort_writes_a_reason_span_and_audits_the_project() {
     let row = audited.iter().find(|a| a.action == "run.aborted").expect("run.aborted audited");
     assert_eq!(row.project_id.as_deref(), Some("prj_fix"), "filterable by project (N13)");
 }
+
+/// R1 (smoke walk 6): the observability floor asked "were there any spans at
+/// all", never "what did the spans say". A worker that ran, reported its own
+/// work as `error` and then exited 0 was recorded `succeeded` + `verified`,
+/// and the worktree carrying the evidence of non-work was reaped — silent
+/// false success. The real shape, reproduced: exit 0, spans present (one of
+/// them ok, so the NEW-2 count floor is satisfied and cannot be what fails
+/// this run), one span with status `error`.
+#[tokio::test]
+async fn an_error_span_on_a_clean_exit_is_not_verified() {
+    let env = setup(&format!(
+        "#!/bin/sh\n\
+         cat >/dev/null\n\
+         {SPAN_CURL}\
+         curl -sf -X POST \"$SURGE_API/runtime/runs/$SURGE_RUN_ID/spans\" \\\n\
+           -H \"Authorization: Bearer $SURGE_RUNTIME_TOKEN\" -H 'Content-Type: application/json' \\\n\
+           -d \"{{\\\"id\\\":\\\"sp_bad_$SURGE_RUN_ID\\\",\\\"run_id\\\":\\\"$SURGE_RUN_ID\\\",\\\"parent_span_id\\\":null,\\\"node_id\\\":null,\\\"role\\\":\\\"worker\\\",\\\"started_at\\\":2,\\\"duration_ms\\\":1,\\\"status\\\":\\\"error\\\",\\\"cost\\\":0.0,\\\"depth\\\":0,\\\"policy_decision\\\":null,\\\"body\\\":\\\"could not create the requested file\\\"}}\" >/dev/null\n\
+         exit 0\n"
+    ))
+    .await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let run_id = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+
+    // The lease release is the monitor's last write before the reap.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap().lease.is_some() {
+        assert!(std::time::Instant::now() < deadline, "lease never released");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert_eq!(
+        issue.status,
+        surge_domain::board::OrchestrationStatus::Failed,
+        "an error-reporting worker does not verify its own issue"
+    );
+
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert!(
+        spans.iter().any(|s| s.id == format!("sp_w_{run_id}")),
+        "the worker's ok span is still there — the NEW-2 count floor was satisfied: {spans:?}"
+    );
+    assert!(
+        spans.iter().any(|s| s.id == format!("sp_end_{run_id}")
+            && s.body.as_deref().unwrap_or("").contains("report an error")),
+        "the run states why it failed, in a span (INV-ERR-1): {spans:?}"
+    );
+}

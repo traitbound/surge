@@ -539,6 +539,39 @@ async fn unobserved(state: &AppState, run_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// True when the worker's own spans say the work failed (R1, smoke walk 6).
+///
+/// INV-EXEC-3 says span content is observability, never control flow, and
+/// this reads span content — so the shape matters. It is admissible for
+/// exactly one reason: it is monotone toward failure. It can only turn
+/// `Succeeded` into `Failed`, never the reverse, so it hands the supervised
+/// side no authority it did not already have — a worker that wants to fail
+/// its run can just exit non-zero. The lie INV-EXEC-3 exists to refuse is a
+/// self-reported *pass*, and no arm here can produce one.
+///
+/// Only `Error` counts. `Running` is a span the worker opened and never
+/// closed, which `resolve_dangling_spans` turns into `error` *after* this
+/// runs and which an otherwise-clean run is allowed to have; `Refused` is
+/// Surge declining something, already surfaced on its own paths. Move that
+/// resolution earlier and every dangling span becomes a failed run.
+///
+/// The reserved namespace is excluded in full, not `unobserved`'s three
+/// prefixes: an abort writes `sp_abort_*` with status `error`, and reading
+/// the supervisor's own termination record back as the worker's verdict
+/// would be circular. A store read failure returns false — a failed read
+/// must never manufacture a failure verdict.
+async fn worker_reported_error(state: &AppState, run_id: &str) -> bool {
+    matches!(
+        surge_store::observatory::worst_span_status(
+            &state.pool,
+            run_id,
+            &RESERVED_SPAN_PREFIXES,
+        )
+        .await,
+        Ok(Some(SpanStatus::Error))
+    )
+}
+
 /// Spawn a worker: prompt on stdin, stderr tailed into a channel so a failed
 /// worker's actual error is a visible record, not a discarded pipe
 /// (smoke 2026-08-25, F4; INV-ERR-1).
@@ -781,18 +814,33 @@ async fn monitor(
     };
 
     let now = now_ms();
-    // Observability floor (NEW-2): a work-order run that exits 0 having
-    // produced no spans and never heartbeated did not do the work — it never
-    // reached Surge. Exit code alone would call that `verified` and flip the
-    // issue, which is indistinguishable from success with nothing behind it.
-    // Span count and heartbeat state are Surge-observed facts, so deriving
-    // from them is INV-EXEC-3-clean.
+    // Observability floor (NEW-2, extended by R1): a work-order run that
+    // exits 0 is only `verified` if nothing Surge observed contradicts it.
+    // Exit code alone would flip the issue on two shapes that are
+    // indistinguishable from success with nothing behind it:
+    //
+    //   * no spans and no heartbeat — the worker never reached Surge (NEW-2);
+    //   * spans that say `error` — the worker reached Surge and reported that
+    //     its own work failed, then exited 0 anyway (R1, smoke walk 6: an
+    //     empty task branch recorded `succeeded` + `verified`, then reaped).
+    //
+    // Both floors only ever downgrade, never promote; see
+    // `worker_reported_error` for why reading span status is INV-EXEC-3-clean.
     let (status, reason) = match (status, &issue_id) {
         (RunStatus::Succeeded, Some(_)) if unobserved(&state, &run_id).await => (
             RunStatus::Failed,
             Some(
                 "worker exited 0 but appended no spans and never heartbeated — it could not \
                  reach Surge (check plugin registration in the compiled .claude/)"
+                    .to_string(),
+            ),
+        ),
+        (RunStatus::Succeeded, Some(_)) if worker_reported_error(&state, &run_id).await => (
+            RunStatus::Failed,
+            Some(
+                "worker exited 0 but its own spans report an error — the work it described \
+                 did not succeed, so the issue is not verified; read the run in the \
+                 Observatory, then retry or amend the work order"
                     .to_string(),
             ),
         ),

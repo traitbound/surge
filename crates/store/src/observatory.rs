@@ -212,6 +212,52 @@ pub async fn span_tree(pool: &SqlitePool, run_id: &str) -> anyhow::Result<Vec<Sp
         .collect())
 }
 
+/// The worst status among a run's spans, ignoring any span whose id starts
+/// with one of `ignore_id_prefixes`. The supervisor reserves an id namespace
+/// for its own termination and refusal records and `runtime_api::append_span`
+/// refuses those ids at the door, so excluding them is exactly what makes the
+/// answer "what did the *worker* say" rather than "what has anyone written".
+///
+/// Severity order is `error` > `refused` > `running` > `ok`; `None` means the
+/// run has no span outside the ignored namespace. This reports the observed
+/// fact only — which statuses may block a terminal transition is the
+/// supervisor's policy (see `supervisor::worker_reported_error`), not the
+/// store's.
+///
+/// The prefixes travel as a JSON array so the filter stays one
+/// compile-checked query (ADR-2) with the namespace defined in exactly one
+/// place, the server's `RESERVED_SPAN_PREFIXES`. `substr(...) = value`, not
+/// `LIKE value || '%'`: every reserved prefix contains `_`, which LIKE would
+/// read as a single-character wildcard.
+pub async fn worst_span_status(
+    pool: &SqlitePool,
+    run_id: &str,
+    ignore_id_prefixes: &[&str],
+) -> anyhow::Result<Option<SpanStatus>> {
+    let ignored = serde_json::to_string(ignore_id_prefixes)?;
+    let row = sqlx::query!(
+        r#"SELECT s.status AS "status!: String"
+           FROM span s
+           WHERE s.run_id = ?1
+             AND NOT EXISTS (
+                 SELECT 1 FROM json_each(?2) p
+                 WHERE substr(s.id, 1, length(p.value)) = p.value
+             )
+           ORDER BY CASE s.status
+                        WHEN 'error' THEN 0
+                        WHEN 'refused' THEN 1
+                        WHEN 'running' THEN 2
+                        ELSE 3
+                    END
+           LIMIT 1"#,
+        run_id,
+        ignored
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| parse_span_status(&r.status)))
+}
+
 /// Terminal transition observed by the supervisor (INV-EXEC-3). Guarded:
 /// only a still-running run moves — an abort that already landed stands.
 pub async fn finish_run_if_running(

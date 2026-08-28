@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.status AS \"status!: String\"\n           FROM span s\n           WHERE s.run_id = ?1\n             AND NOT EXISTS (\n                 SELECT 1 FROM json_each(?2) p\n                 WHERE substr(s.id, 1, length(p.value)) = p.value\n             )\n           ORDER BY CASE s.status\n                        WHEN 'error' THEN 0\n                        WHEN 'refused' THEN 1\n                        WHEN 'running' THEN 2\n                        ELSE 3\n                    END\n           LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "status!: String",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "span",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "83e02db9e519847d5397596439f56db4e64a2de1f0968dda46add33f380ab74d"
+}
