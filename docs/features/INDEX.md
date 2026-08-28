@@ -31,9 +31,11 @@ One row per Layer 4 feature spec.
 
 | Feature | Spec | Phase | Status |
 |---|---|---|---|
-| canvas-editor | — | phase-1.1 | planned |
+| canvas-editor | [draft](canvas-editor.md) | phase-1.1 | draft — 13 open blockers, rewrite pending |
 | code-roundtrip | — | phase-1.1 | planned |
-| pipeline-versioning | — | phase-1.1 | planned |
+| pipeline-assignment | — | phase-1.1 | planned |
+| pipeline-revisions | — | phase-1.1 | planned |
+| promote-to-fork | — | phase-1.1 | planned |
 | library-store | — | phase-1.2 | planned |
 | trust-and-import | — | phase-1.2 | planned |
 | compile-dialog | — | phase-1.2 | planned |

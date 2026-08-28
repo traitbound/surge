@@ -69,9 +69,13 @@ graph TB
 
 | Feature | Hint |
 |---|---|
-| pipeline-versioning | fork, provenance, **local revision entity**, blessed flag (identity machinery, not the history UI) — **spec'd first** |
+| pipeline-assignment | assignment data path (store + endpoint), and making `pipeline.content_hash` mean what it says — **spec'd first** |
+| pipeline-revisions | the project-local revision entity, its lifecycle, materialization staleness, run recording |
+| promote-to-fork | fork semantics, provenance, blessed preservation, id-preserving hash equality |
 | canvas-editor | React Flow, six node kinds (Block opaque), palette creation, edges/gates, selection, undo/redo, the pipeline HTTP seam, UI scaffolding |
 | code-roundtrip | canvas ⇄ text format, hash-fidelity contract, byte-identical second pass, id minting, lossy `EdgeTrigger::parse` |
+
+**`pipeline-versioning` split into three, 2026-08-28.** Drafted as one spec, it drew 28 blockers across two fresh reviews. The cause was breadth, not prose: it carried assignment, the revision entity, forking, staleness integration, compile targeting, run recording and a hash backfill, compressed to exactly the 8-AC cap — which was gaming the cap, not respecting it. Each round the design collided with substrate the spec was too broad to have grounded: `materialization.pipeline_id` has no `ON DELETE` action, so deleting a compiled revision is FK-blocked; the compiled `surge.yaml` carries the pipeline **name** into a committed file (`crates/compiler/src/emit.rs:161`), so a synthetic revision name would land in the operator's git history. Five specs in this epic, not three.
 
 **Spec order inverted 2026-08-28.** The list was authored canvas-first. Grounding the canvas spec established that commit-on-mutation is what INV-ID-3 requires, which makes the project-local revision entity a *prerequisite* of the canvas rather than a consequence of it. `pipeline-versioning` is spec'd first.
 
