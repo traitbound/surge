@@ -143,34 +143,101 @@ pub(crate) fn log_span_failure(res: anyhow::Result<()>, what: &str, run_id: &str
     }
 }
 
-/// A refusal is data: a two-second run whose single span carries the reason.
-async fn refusal_run(
-    state: &AppState,
-    project_id: &str,
-    issue_id: &str,
-    wo_hash: &str,
-    mat_hash: &str,
-    reason: &str,
-) -> anyhow::Result<String> {
+/// What a refused run was going to do. The `run` table pairs these columns by
+/// CHECK constraint (`store/migrations/0002_object_model.sql`, the two CHECKs
+/// under `CREATE TABLE run`) — a work-order run carries an issue AND a
+/// work-order hash, a doc run carries neither (design §23-Fourteen) — so the
+/// shape is chosen here once rather than at each call site, where a
+/// hand-written doc refusal would fail the constraint.
+pub(crate) enum RefusedWork<'a> {
+    WorkOrder { issue_id: &'a str, work_order_hash: &'a str },
+    Doc,
+}
+
+/// One refusal, everything about it. Both APIs build refusal records through
+/// [`refusal_run`], so a fix to the record shape reaches every path at once
+/// (walk 3 N1/N6/N13: the same refusal reached by a different token kind or
+/// run kind must not have a second, hand-written builder; walk 6 R3 is what
+/// two divergent builders cost).
+pub(crate) struct Refusal<'a> {
+    pub project_id: &'a str,
+    pub work: RefusedWork<'a>,
+    /// The hash the refusal happened under, or `"none"` when the refusal is
+    /// precisely that there is no fresh materialization (the column is NOT
+    /// NULL, and a run that never chose a graph has no hash to record).
+    pub materialization_hash: &'a str,
+    pub reason: &'a str,
+    /// INV-OBS-1's action/actor. `dispatch.refused` for the supervisor's own
+    /// dispatch paths; an interactive claim names itself and its claimant,
+    /// so the trail distinguishes "Surge declined to dispatch" from "a human
+    /// session was declined a lease".
+    pub audit_action: &'a str,
+    pub audit_actor: &'a str,
+}
+
+/// A refusal is data: a zero-length run whose single span carries the reason,
+/// plus the audit entry (INV-ERR-1 wants a visible record; INV-OBS-1 wants
+/// the privileged act on the trail — refusals of privileged acts owe both).
+///
+/// Nothing here moves other state — no lease is taken, no issue changes — so
+/// the three writes autocommit; `audit::record` on `&pool` is the documented
+/// executor for exactly that case (INV-DATA-8, `store/src/audit.rs`).
+pub(crate) async fn refusal_run(state: &AppState, r: Refusal<'_>) -> anyhow::Result<String> {
     let now = now_ms();
-    let run_id = format!("run_{}", &surge_store::tokens::hash(&format!("{issue_id}{now}"))[..12]);
+    // Run ids stay derived from the thing refused, as before: the issue for
+    // a work-order refusal, the project for a doc run, which has no issue.
+    let seed = match r.work {
+        RefusedWork::WorkOrder { issue_id, .. } => issue_id,
+        RefusedWork::Doc => r.project_id,
+    };
+    let run_id = format!("run_{}", &surge_store::tokens::hash(&format!("{seed}{now}"))[..12]);
+    let (kind, issue_id, work_order_hash) = match r.work {
+        RefusedWork::WorkOrder { issue_id, work_order_hash } => {
+            (RunKind::WorkOrder, Some(issue_id.to_string()), Some(work_order_hash.to_string()))
+        }
+        RefusedWork::Doc => (RunKind::Doc, None, None),
+    };
     let run = Run {
         id: run_id.clone(),
-        project_id: project_id.into(),
-        issue_id: Some(issue_id.into()),
-        kind: RunKind::WorkOrder,
-        materialization_hash: mat_hash.into(),
-        work_order_hash: Some(wo_hash.into()),
+        project_id: r.project_id.into(),
+        issue_id,
+        kind,
+        materialization_hash: r.materialization_hash.into(),
+        work_order_hash,
         status: RunStatus::Refused,
         started_at: now,
         ended_at: Some(now),
         cost: 0.0,
     };
     surge_store::observatory::insert_run(&state.pool, &run).await?;
-    refusal_span(state, &run_id, reason, now).await?;
-    surge_store::audit::record(&state.pool, "dispatch.refused", reason, "human", Some(project_id), now)
-        .await?;
+    refusal_span(state, &run_id, r.reason, now).await?;
+    surge_store::audit::record(
+        &state.pool,
+        r.audit_action,
+        r.reason,
+        r.audit_actor,
+        Some(r.project_id),
+        now,
+    )
+    .await?;
     Ok(run_id)
+}
+
+/// The dispatch refusals the supervisor raises on its own behalf.
+fn dispatch_refusal<'a>(
+    project_id: &'a str,
+    work: RefusedWork<'a>,
+    materialization_hash: &'a str,
+    reason: &'a str,
+) -> Refusal<'a> {
+    Refusal {
+        project_id,
+        work,
+        materialization_hash,
+        reason,
+        audit_action: "dispatch.refused",
+        audit_actor: "human",
+    }
 }
 
 /// The span that makes a refusal visible (INV-ERR-1, phase.md:43). Every
@@ -250,8 +317,13 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
     let mat = surge_store::materializations::fresh_for_project(&state.pool, &project.id).await?;
     let Some(mat) = mat else {
         let reason = "dispatch refused — no fresh materialization; compile first (INV-ID-1)";
-        let run_id =
-            refusal_run(state, &project.id, issue_id, &issue.work_order_hash, "none", reason).await?;
+        let run_id = refusal_run(state, dispatch_refusal(
+            &project.id,
+            RefusedWork::WorkOrder { issue_id, work_order_hash: &issue.work_order_hash },
+            "none",
+            reason,
+        ))
+        .await?;
         return Ok(DispatchOutcome::Refused { run_id, reason: reason.into() });
     };
 
@@ -261,9 +333,13 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
     let wo_hash = surge_compiler::work_order::work_order_hash(&rendered);
     if wo_hash != issue.work_order_hash {
         let reason = "dispatch refused — work order changed after issue generation (hash mismatch)";
-        let run_id =
-            refusal_run(state, &project.id, issue_id, &issue.work_order_hash, &mat.content_hash, reason)
-                .await?;
+        let run_id = refusal_run(state, dispatch_refusal(
+            &project.id,
+            RefusedWork::WorkOrder { issue_id, work_order_hash: &issue.work_order_hash },
+            &mat.content_hash,
+            reason,
+        ))
+        .await?;
         return Ok(DispatchOutcome::Refused { run_id, reason: reason.into() });
     }
 
@@ -1009,14 +1085,28 @@ async fn release_if_held(
 /// Human-triggered doc run (design §23-Fourteen): same supervisor, no issue,
 /// no lease, no worktree — the worker runs in the bound repo itself, since a
 /// doc run's whole point is producing a declared doc there.
-pub async fn dispatch_doc_run(state: &AppState, project_id: &str) -> anyhow::Result<String> {
+pub async fn dispatch_doc_run(
+    state: &AppState,
+    project_id: &str,
+) -> anyhow::Result<DispatchOutcome> {
     let now = now_ms();
     let project = surge_store::projects::get(&state.pool, project_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("unknown project"))?;
-    let mat = surge_store::materializations::fresh_for_project(&state.pool, project_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no fresh materialization; compile first"))?;
+    // INV-ID-1, the same check `dispatch_issue` makes and the same record it
+    // writes: this branch used to be a bare `anyhow!` that `human_api`
+    // flattened into `500 {"error":"doc run dispatch failed"}` — no run, no
+    // span, no audit entry, the reason on the server's stderr only. A doc run
+    // has no issue and no work-order hash, so the record is a `doc` run
+    // (ESC-2, INV-ERR-1).
+    let Some(mat) = surge_store::materializations::fresh_for_project(&state.pool, project_id).await?
+    else {
+        let reason = "doc run refused — no fresh materialization; compile first (INV-ID-1)";
+        let run_id =
+            refusal_run(state, dispatch_refusal(&project.id, RefusedWork::Doc, "none", reason))
+                .await?;
+        return Ok(DispatchOutcome::Refused { run_id, reason: reason.into() });
+    };
 
     let run_id = format!("run_{}", &surge_store::tokens::hash(&format!("{project_id}{now}"))[..12]);
     let run = Run {
@@ -1091,7 +1181,7 @@ pub async fn dispatch_doc_run(state: &AppState, project_id: &str) -> anyhow::Res
         stderr_tail,
         None,
     ));
-    Ok(run_id)
+    Ok(DispatchOutcome::Spawned { run_id })
 }
 
 // ---------------------------------------------------------------------------
