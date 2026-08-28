@@ -152,6 +152,32 @@ async fn create_issue(env: &Env) -> surge_domain::board::Issue {
     issue
 }
 
+/// How long a barrier waits for a write that is already in flight before it
+/// calls the supervisor broken. Generous on purpose: these tests run under
+/// `cargo test`'s full thread fan-out, and the failure this bounds ("the
+/// monitor never got there") is a real defect, not a slow machine. It is the
+/// loudness bound on an already-correct wait, never the wait itself — every
+/// barrier below polls a specific condition, so a longer budget can only turn
+/// a spurious red into a pass, never a genuine red into a green.
+const BARRIER_MS: u64 = 10_000;
+
+/// Barrier on the RUN ROW, and nothing else.
+///
+/// `supervisor::monitor` writes the terminal run status FIRST and then, in
+/// order, on the same task: revokes the runtime token, appends the run's end
+/// span, resolves the worker's dangling spans, releases the lease (which is
+/// also where the issue's verdict is written — one UPDATE, see
+/// `store::issues::release_lease`), reaps the worktree, and audits
+/// `run.finished`. Every one of those lands strictly AFTER this returns.
+///
+/// So this is the right barrier for asserting a run's own status and for
+/// anything the worker itself wrote before exiting, and the WRONG barrier for
+/// issue status, lease state, spans, tokens or worktree existence. Use
+/// [`wait_lease_released`] or [`wait_reaped`] for those — reading them off
+/// this one is the harness race that made this file flake under CPU load
+/// (measured: 2 failures in 55 runs with eight-to-sixteen spinning processes
+/// alongside; 10-20% where it was first reported), because the window between
+/// the run row and the writes after it widens with contention.
 async fn wait_terminal(env: &Env, run_id: &str, timeout_ms: u64) -> RunStatus {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
     loop {
@@ -164,26 +190,37 @@ async fn wait_terminal(env: &Env, run_id: &str, timeout_ms: u64) -> RunStatus {
     }
 }
 
-/// The run reaches a terminal status BEFORE the monitor releases the lease
-/// and writes the issue's verdict, so any assertion about issue status has to
-/// wait for that last write rather than for `wait_terminal` alone.
+/// Barrier on the monitor's issue-side writes: the lease release, the issue's
+/// verdict, and — because they are awaited earlier on the same task —
+/// the end span, the resolved dangling spans and the revoked runtime token.
+///
+/// The verdict rides in the same UPDATE as the lease release, so a null lease
+/// is proof the status has been written too: `assert_eq!` the exact status
+/// after this rather than polling for the status you hoped for, which would
+/// turn a wrong verdict into a timeout instead of a value mismatch.
 async fn wait_lease_released(env: &Env, issue_id: &str) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_millis(BARRIER_MS);
     loop {
         let issue = surge_store::issues::get(&env.state.pool, issue_id).await.unwrap().unwrap();
         if issue.lease.is_none() {
             return;
         }
-        assert!(std::time::Instant::now() < deadline, "lease never released");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "lease never released on {issue_id} — still held by run {:?}, status {:?}",
+            issue.lease.as_ref().map(|l| &l.run_id),
+            issue.status
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
-/// The reap is the monitor's LAST act, after the lease release, so a test
-/// that dispatched a real worker polls for it rather than reading the
-/// directory the instant the run goes terminal.
+/// Barrier on the reap, which is the monitor's last act before its audit row
+/// — after the lease release, so [`wait_lease_released`] is not a barrier for
+/// it either. A test that dispatched a real worker polls for the directory to
+/// go rather than reading it the instant the run goes terminal.
 async fn wait_reaped(dir: &std::path::Path) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now() + Duration::from_millis(BARRIER_MS);
     while dir.exists() {
         assert!(std::time::Instant::now() < deadline, "worktree never reaped: {dir:?}");
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -216,8 +253,20 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
     ).await;
     compile(&env).await;
     let issue = create_issue(&env).await;
-    // Pass the observation file path through the environment the script inherits.
-    std::env::set_var("OUT", env.work.path().join("observed.txt"));
+    // Pass the observation file path by writing it INTO the script, not by
+    // exporting it from the test process. `std::env::set_var` mutates the
+    // environment of a binary running twenty-odd tests across ten threads,
+    // every one of which spawns processes that read that same environment —
+    // a data race by construction, and one more way this file fails under
+    // load. The script is the only reader, so it is the right place to put it.
+    let observed = env.work.path().join("observed.txt");
+    let script = env.work.path().join("worker.sh");
+    let body = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(
+        &script,
+        body.replace("#!/bin/sh\n", &format!("#!/bin/sh\nOUT={}\n", observed.display())),
+    )
+    .unwrap();
 
     let out = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
         surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
@@ -225,7 +274,7 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
     };
     assert_eq!(wait_terminal(&env, &out, 5_000).await, RunStatus::Succeeded);
 
-    let observed = std::fs::read_to_string(env.work.path().join("observed.txt")).unwrap();
+    let observed = std::fs::read_to_string(&observed).unwrap();
     assert!(observed.contains("stdin-workorder"), "work order delivered on stdin (F2): {observed}");
     assert!(observed.contains("stdin-fetchtool"),
         "the prompt names surge_fetch_work_order, like the seeded implementer body: {observed}");
@@ -277,12 +326,15 @@ async fn silent_worker_is_reclaimed_at_ttl() {
         _ => panic!("expected spawn"),
     };
     assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+    // The reclaim span and the issue's verdict are both written after the run
+    // row; the lease release is the last of the three.
+    wait_lease_released(&env, "iss_1").await;
     let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
     assert!(spans.iter().any(|s| s.body.as_deref().unwrap_or("").contains("lease reclaimed")),
-        "the reclaim reason is a visible record (§06-03)");
+        "the reclaim reason is a visible record (§06-03): {spans:?}");
     let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
     assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Failed);
-    assert!(!worktree_dir(&env).exists());
+    wait_reaped(&worktree_dir(&env)).await;
 }
 
 #[tokio::test]
@@ -313,17 +365,10 @@ async fn abort_lands_at_the_workers_next_status_poll() {
         "the abort stands even after the process exits (guarded transition)");
     // The ledger write is immediate; the lease releases when the monitor
     // observes the worker's exit — wait for that separately.
-    let deadline = std::time::Instant::now() + Duration::from_secs(8);
-    let issue = loop {
-        let i = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
-        if i.lease.is_none() {
-            break i;
-        }
-        assert!(std::time::Instant::now() < deadline, "lease never released after abort");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    wait_lease_released(&env, "iss_1").await;
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
     assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Aborted);
-    assert!(!worktree_dir(&env).exists());
+    wait_reaped(&worktree_dir(&env)).await;
     let _ = env.api_base; // live server held for the worker's polls
 }
 
@@ -400,7 +445,21 @@ async fn relative_work_dir_resolves_outside_the_bound_repo() {
     )).await;
     compile(&env).await;
     let issue = create_issue(&env).await;
+    // This is the one test whose work_dir lands under the crate directory
+    // rather than in a tempdir — that is the point of it — so it owns the
+    // cleanup. A drop guard, not a trailing statement: an assertion below
+    // unwinds past a trailing statement and leaves `crates/server/
+    // tmp-e2e-worktrees-<pid>/` behind, which is exactly what a failing run
+    // used to do.
+    struct ScratchDir(std::path::PathBuf);
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     let rel = format!("tmp-e2e-worktrees-{}", std::process::id());
+    let scratch = ScratchDir(std::path::absolute(&rel).unwrap());
     let mut cfg = (*env.state.supervisor).clone();
     cfg.work_dir = rel.clone().into(); // relative, like the default
     let state = AppState::with_supervisor(env.state.pool.clone(), cfg);
@@ -414,9 +473,7 @@ async fn relative_work_dir_resolves_outside_the_bound_repo() {
     assert!(!env.repo.path().join(&rel).exists(), "worktree landed inside the bound repo");
     assert!(!env.repo.path().join("surge-worktrees").exists());
     // It lived under cwd and was reaped.
-    let local = std::path::absolute(&rel).unwrap();
-    wait_reaped(&local.join("prj_fix/iss_1")).await;
-    let _ = std::fs::remove_dir_all(&local);
+    wait_reaped(&scratch.0.join("prj_fix/iss_1")).await;
 }
 
 /// F4 regression (spawn half): a dispatch that fails after the lease claim
@@ -502,6 +559,8 @@ async fn clean_exit_without_spans_is_not_verified() {
         _ => panic!("expected spawn"),
     };
     assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+    // The issue's verdict and the reason span both land after the run row.
+    wait_lease_released(&env, "iss_1").await;
     let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
     assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Failed);
     let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
@@ -760,6 +819,10 @@ async fn a_failed_issue_can_be_retried_and_redispatched() {
         _ => panic!("expected spawn"),
     };
     assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+    // The verdict lands after the run row — and reading it early would also
+    // make the refusal below pass for the wrong reason (refused as `leased`
+    // rather than as `failed`).
+    wait_lease_released(&env, "iss_1").await;
     let failed = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
     assert_eq!(failed.status, surge_domain::board::OrchestrationStatus::Failed);
     // A failed issue is not dispatchable...
@@ -772,8 +835,25 @@ async fn a_failed_issue_can_be_retried_and_redispatched() {
     let retried = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
     assert_eq!(retried.status, surge_domain::board::OrchestrationStatus::Eligible);
     assert_eq!(retried.retry_count, failed.retry_count + 1, "the count is on the card (§06)");
+
+    // The redispatch reuses the failed run's worktree path, and the reap is
+    // the monitor's LAST act — later than the lease release this test already
+    // waited on. Redispatching before it lands makes `git worktree add` fail
+    // on a directory that is about to be deleted.
+    wait_reaped(&worktree_dir(&env)).await;
+    // The redispatched worker stays alive, so the lease it takes is still
+    // held when the guard below reads it. The `exit 7` worker above would
+    // race that read to its own exit — the monitor releases the lease the
+    // moment it observes the process gone, and under load it wins. Holding
+    // the lease for the fixture's 120s TTL makes the state durable rather
+    // than making the test wait for a window that may already have closed.
+    let slow = env.work.path().join("slow-worker.sh");
+    std::fs::write(&slow, "#!/bin/sh\ncat >/dev/null\nsleep 30\n").unwrap();
+    let mut cfg = (*env.state.supervisor).clone();
+    cfg.worker_cmd = vec!["/bin/sh".into(), slow.to_string_lossy().into_owned()];
+    let held = AppState::with_supervisor(env.state.pool.clone(), cfg);
     assert!(matches!(
-        surge_server::supervisor::dispatch_issue(&env.state, "iss_1").await.unwrap(),
+        surge_server::supervisor::dispatch_issue(&held, "iss_1").await.unwrap(),
         surge_server::supervisor::DispatchOutcome::Spawned { .. }
     ));
     // Guard: verified and leased issues are never retryable. The release is
