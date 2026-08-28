@@ -8,7 +8,7 @@ One row per Layer 4 feature spec.
 
 ## Phase 0 — The materialization loop
 
-Built code-first; `docs/phases/phase-0/phase.md` is the authority on which parts exist.
+**Accepted 2026-08-28** (smoke walk 7, GO, SHA `285b54f`, with exceptions — see the phase doc). Built code-first; `docs/phases/phase-0/phase.md` is the authority on which parts exist.
 
 | Feature | Spec | Phase | Status |
 |---|---|---|---|

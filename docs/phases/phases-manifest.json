@@ -1,8 +1,35 @@
 {
   "phases": [
-    {"id": "phase-0", "name": "The materialization loop", "status": "in_progress", "doc": "phase-0/phase.md", "note": "walk-5 findings all fixed; awaiting the re-walk that turns the NO-GO into a GO"},
-    {"id": "phase-1", "name": "Author: canvas & library", "status": "not_started", "doc": "phase-1/phase.md"},
-    {"id": "phase-2", "name": "Execute: boards & lifecycle", "status": "not_started", "doc": "phase-2/phase.md"},
-    {"id": "phase-3", "name": "Observe: observatory & operations", "status": "not_started", "doc": "phase-3/phase.md"}
+    {
+      "id": "phase-0",
+      "name": "The materialization loop",
+      "status": "accepted",
+      "doc": "phase-0/phase.md",
+      "note": "accepted with exceptions \u2014 no UI rendered on the accepting walk; S8 still provisional. See phase.md.",
+      "accepted": {
+        "date": "2026-08-28",
+        "walk": "smoke-7-2026-08-28.md",
+        "sha": "285b54f",
+        "verdict": "GO (scoped re-walk, accepted with exceptions \u2014 see phase.md)"
+      }
+    },
+    {
+      "id": "phase-1",
+      "name": "Author: canvas & library",
+      "status": "next",
+      "doc": "phase-1/phase.md"
+    },
+    {
+      "id": "phase-2",
+      "name": "Execute: boards & lifecycle",
+      "status": "not_started",
+      "doc": "phase-2/phase.md"
+    },
+    {
+      "id": "phase-3",
+      "name": "Observe: observatory & operations",
+      "status": "not_started",
+      "doc": "phase-3/phase.md"
+    }
   ]
 }

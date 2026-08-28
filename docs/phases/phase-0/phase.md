@@ -1,6 +1,15 @@
 # Phase 0 — The materialization loop
 
-**Status:** in_progress — all walk-5 findings fixed; last recorded verdict is NO-GO (`smoke-5-2026-08-26.md`, SHA `204e79d`), awaiting the re-walk on the current head.
+**Status:** **accepted** 2026-08-28 — smoke walk 7 returned **GO** (`smoke-7-2026-08-28.md`, SHA `285b54f`), the first GO across seven walks. Accepted with the exceptions listed below; read them before treating phase 0 as finished.
+
+**What the acceptance rests on.** Walk 7 was a *scoped* re-walk — walk 6's three findings plus a headline-loop regression check — not a full cold walk of this checklist. The Done-when lines are covered by walks 5, 6 and 7 between them, each on a different SHA. Nine real `claude -p` runs, every success verified against both the DB row and the git object behind it, zero 5xx, clean drain.
+
+**Accepted with these exceptions:**
+
+- **No UI was rendered on the accepting walk.** Walk 7's verdict rests on API, DB rows and git state only. The S8 cost-column change (`cost n/m`) has still never been looked at in a browser — walk 6 graded it *provisional* on the served bundle, and walk 7 did not upgrade that. No responsive surface has been walked on a device at any point.
+- **Two commits landed after the walked SHA**: `459ebad` (the walk record) and `f8b1597` (W1's fix — one sentence in the work-order template). W1's fix changes the bytes every worker reads and was verified by the suite, **not** by a walk.
+- **Known-open, triaged non-blocking**: N5 (reap destroys uncommitted work), N12 (`instance_meta` unwritten), B1 (no URL routing), B2 ("not assigned" after compile), F4–F6. `doc`/`coe`/`plan_issue` are schema-only by design (in-scope item 2).
+- **Documented limitations of the commit floor**: a legitimately commit-free work order would false-fail (carve-out filed to phase 2, on the pipeline node's declared kind), and the floor is forgeable with `git commit --allow-empty` — judging work product is Gate-2 review's job, not the supervisor's.
 **Commitment level:** Phase 0 — ships to its real user (the operator) immediately; nothing here is throwaway.
 **Time horizon:** ~3 weeks
 
