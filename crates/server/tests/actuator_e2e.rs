@@ -164,6 +164,32 @@ async fn wait_terminal(env: &Env, run_id: &str, timeout_ms: u64) -> RunStatus {
     }
 }
 
+/// The run reaches a terminal status BEFORE the monitor releases the lease
+/// and writes the issue's verdict, so any assertion about issue status has to
+/// wait for that last write rather than for `wait_terminal` alone.
+async fn wait_lease_released(env: &Env, issue_id: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let issue = surge_store::issues::get(&env.state.pool, issue_id).await.unwrap().unwrap();
+        if issue.lease.is_none() {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "lease never released");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// The reap is the monitor's LAST act, after the lease release, so a test
+/// that dispatched a real worker polls for it rather than reading the
+/// directory the instant the run goes terminal.
+async fn wait_reaped(dir: &std::path::Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while dir.exists() {
+        assert!(std::time::Instant::now() < deadline, "worktree never reaped: {dir:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn worktree_dir(env: &Env) -> std::path::PathBuf {
     env.work.path().join("worktrees/prj_fix/iss_1")
 }
@@ -181,6 +207,8 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
          test -f .claude/settings.json && echo compiled >> \"$OUT\"\n\
          test -f \"work_orders/$SURGE_ISSUE_ID.md\" && echo workorder >> \"$OUT\"\n\
          git rev-parse --abbrev-ref HEAD >> \"$OUT\"\n\
+         echo note > note.md\n\
+         git add -A && git commit -qm 'did the work'\n\
          curl -sf -X POST \"$SURGE_API/runtime/runs/$SURGE_RUN_ID/spans\" \\\n\
            -H \"Authorization: Bearer $SURGE_RUNTIME_TOKEN\" -H 'Content-Type: application/json' \\\n\
            -d \"{\\\"id\\\":\\\"sp_w_$SURGE_RUN_ID\\\",\\\"run_id\\\":\\\"$SURGE_RUN_ID\\\",\\\"parent_span_id\\\":null,\\\"node_id\\\":null,\\\"role\\\":\\\"worker\\\",\\\"started_at\\\":1,\\\"duration_ms\\\":1,\\\"status\\\":\\\"ok\\\",\\\"cost\\\":0.0,\\\"depth\\\":0,\\\"policy_decision\\\":null,\\\"body\\\":\\\"worked\\\"}\" >/dev/null\n\
@@ -210,10 +238,11 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
 
     // Lease released, issue verified from the exit code (INV-EXEC-3),
     // worktree reaped (INV-EXEC-2), bound repo untouched beyond git metadata.
+    wait_lease_released(&env, "iss_1").await;
     let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
     assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Verified);
     assert!(issue.lease.is_none());
-    assert!(!worktree_dir(&env).exists(), "worktree reaped at lease end");
+    wait_reaped(&worktree_dir(&env)).await; // reaped at lease end (INV-EXEC-2)
     assert!(!env.repo.path().join(".claude").exists(), "bound repo untouched (INV-DATA-1)");
 }
 
@@ -351,6 +380,12 @@ async fn reqwest_lite(url: &str, token: &str, post: bool) -> (u16, String) {
 }
 
 /// What the real plugin's MCP tool does, in shell: one worker span.
+/// A worker that produced something and committed it on the task branch —
+/// what "the worker did its job" means once the commit floor is in force
+/// (R1). Fixtures whose subject is anything other than the floor itself use
+/// this, so they exercise the shape a real work order has.
+const COMMIT_WORK: &str = "echo note > note.md\ngit add -A && git commit -qm 'did the work'\n";
+
 const SPAN_CURL: &str = "curl -sf -X POST \"$SURGE_API/runtime/runs/$SURGE_RUN_ID/spans\" \
  -H \"Authorization: Bearer $SURGE_RUNTIME_TOKEN\" -H 'Content-Type: application/json' \
  -d \"{\\\"id\\\":\\\"sp_w_$SURGE_RUN_ID\\\",\\\"run_id\\\":\\\"$SURGE_RUN_ID\\\",\\\"parent_span_id\\\":null,\\\"node_id\\\":null,\\\"role\\\":\\\"worker\\\",\\\"started_at\\\":1,\\\"duration_ms\\\":1,\\\"status\\\":\\\"ok\\\",\\\"cost\\\":0.0,\\\"depth\\\":0,\\\"policy_decision\\\":null,\\\"body\\\":\\\"worked\\\"}\" >/dev/null\n";
@@ -360,7 +395,9 @@ const SPAN_CURL: &str = "curl -sf -X POST \"$SURGE_API/runtime/runs/$SURGE_RUN_I
 /// dispatch must work with the server's cwd nowhere near the repo.
 #[tokio::test]
 async fn relative_work_dir_resolves_outside_the_bound_repo() {
-    let env = setup(&format!("#!/bin/sh\ncat >/dev/null\n{}exit 0\n", SPAN_CURL)).await;
+    let env = setup(&format!(
+        "#!/bin/sh\ncat >/dev/null\n{SPAN_CURL}{COMMIT_WORK}exit 0\n"
+    )).await;
     compile(&env).await;
     let issue = create_issue(&env).await;
     let rel = format!("tmp-e2e-worktrees-{}", std::process::id());
@@ -378,7 +415,7 @@ async fn relative_work_dir_resolves_outside_the_bound_repo() {
     assert!(!env.repo.path().join("surge-worktrees").exists());
     // It lived under cwd and was reaped.
     let local = std::path::absolute(&rel).unwrap();
-    assert!(!local.join("prj_fix/iss_1").exists(), "worktree reaped");
+    wait_reaped(&local.join("prj_fix/iss_1")).await;
     let _ = std::fs::remove_dir_all(&local);
 }
 
@@ -684,6 +721,8 @@ async fn a_span_the_worker_never_closed_is_resolved_at_run_end() {
          curl -sf -X POST \"$SURGE_API/runtime/runs/$SURGE_RUN_ID/spans\" \\\n\
            -H \"Authorization: Bearer $SURGE_RUNTIME_TOKEN\" -H 'Content-Type: application/json' \\\n\
            -d \"{\\\"id\\\":\\\"sp_open_$SURGE_RUN_ID\\\",\\\"run_id\\\":\\\"$SURGE_RUN_ID\\\",\\\"parent_span_id\\\":null,\\\"node_id\\\":null,\\\"role\\\":\\\"worker\\\",\\\"started_at\\\":1,\\\"duration_ms\\\":null,\\\"status\\\":\\\"running\\\",\\\"cost\\\":0.0,\\\"depth\\\":0,\\\"policy_decision\\\":null,\\\"body\\\":\\\"started the work\\\"}\" >/dev/null\n\
+         echo note > note.md\n\
+         git add -A && git commit -qm 'did the work'\n\
          exit 0\n",
     ).await;
     compile(&env).await;
@@ -696,11 +735,7 @@ async fn a_span_the_worker_never_closed_is_resolved_at_run_end() {
 
     // The lease release is the monitor's last write; wait for it so the span
     // resolution that precedes it has certainly happened.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap().lease.is_some() {
-        assert!(std::time::Instant::now() < deadline, "lease never released");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_lease_released(&env, "iss_1").await;
     let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
     assert!(!spans.is_empty());
     assert!(
@@ -757,7 +792,9 @@ async fn a_failed_issue_can_be_retried_and_redispatched() {
 /// once the supervisor has observed the process gone.
 #[tokio::test]
 async fn a_runtime_token_dies_with_its_run() {
-    let env = setup(&format!("#!/bin/sh\ncat >/dev/null\n{}exit 0\n", SPAN_CURL)).await;
+    let env = setup(&format!(
+        "#!/bin/sh\ncat >/dev/null\n{SPAN_CURL}{COMMIT_WORK}exit 0\n"
+    )).await;
     compile(&env).await;
     let issue = create_issue(&env).await;
     let live = |pool: sqlx::SqlitePool| async move {
@@ -833,4 +870,110 @@ async fn abort_writes_a_reason_span_and_audits_the_project() {
     let audited = surge_store::audit::recent(&env.state.pool, 50).await.unwrap();
     let row = audited.iter().find(|a| a.action == "run.aborted").expect("run.aborted audited");
     assert_eq!(row.project_id.as_deref(), Some("prj_fix"), "filterable by project (N13)");
+}
+
+/// Read git state from the bound repo the way the assertions below need it.
+fn git_out(repo: &std::path::Path, args: &[&str]) -> (bool, String) {
+    let out = std::process::Command::new("git")
+        .arg("-C").arg(repo).args(args).output().unwrap();
+    (out.status.success(), String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// R1 (smoke walk 6): the observability floor asked "were there any spans at
+/// all", never "did anything come of them". Walk 6's evidence was a task
+/// branch with no commit on it — `docs/note_C.md` was never created — while
+/// Surge recorded `succeeded` + `verified` and reaped the worktree, so the
+/// evidence of non-work left disk too.
+///
+/// The repro is the real shape: exit 0, spans present (so the NEW-2 count
+/// floor is satisfied and provably not what fails this run), no commit.
+#[tokio::test]
+async fn a_clean_exit_with_no_commit_is_not_verified() {
+    let env = setup(&format!("#!/bin/sh\ncat >/dev/null\n{SPAN_CURL}exit 0\n")).await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let base = git_out(env.repo.path(), &["rev-parse", "HEAD"]).1;
+    let run_id = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+
+    wait_lease_released(&env, "iss_1").await;
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert_eq!(
+        issue.status,
+        surge_domain::board::OrchestrationStatus::Failed,
+        "a run with nothing on its task branch does not verify its issue"
+    );
+
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert!(
+        spans.iter().any(|s| s.id == format!("sp_w_{run_id}")),
+        "the worker's span is still there — the NEW-2 count floor was satisfied: {spans:?}"
+    );
+    assert!(
+        spans.iter().any(|s| s.id == format!("sp_end_{run_id}")
+            && s.body.as_deref().unwrap_or("").contains("no commit")),
+        "the run states why it failed, in a span (INV-ERR-1): {spans:?}"
+    );
+
+    // The floor's premise, pinned: walk 6 observed that task branches survive
+    // the reap, which is what lets the verdict be read from the bound repo's
+    // ref store rather than from a directory that is about to be deleted.
+    // If a reap ever started deleting the branch, this goes red.
+    wait_reaped(&worktree_dir(&env)).await;
+    let (ok, head) = git_out(env.repo.path(), &["rev-parse", "--verify", "task/iss_1"]);
+    assert!(ok, "the task branch outlives the worktree");
+    assert_eq!(head, base, "and still sits on the commit it was created from");
+}
+
+/// The false-failure guard. `crates/server/seed/implementer.md` tells every
+/// worker to append one finished span per unit of work "carrying the status
+/// it earned", and `doc-writer.md` promises that "an honest `error` span
+/// costs you nothing"; the plugin's own tool description says spans are
+/// "observability, never control flow (INV-EXEC-3)".
+///
+/// So a worker that hits a problem at one unit, says so honestly, fixes it
+/// and commits has succeeded — and must be recorded that way. If this test
+/// ever goes red, someone has re-introduced span-content control flow and
+/// broken the contract that buys honest span content.
+#[tokio::test]
+async fn an_honest_error_span_with_a_commit_still_verifies() {
+    let env = setup(&format!(
+        "#!/bin/sh\n\
+         cat >/dev/null\n\
+         {SPAN_CURL}\
+         curl -sf -X POST \"$SURGE_API/runtime/runs/$SURGE_RUN_ID/spans\" \\\n\
+           -H \"Authorization: Bearer $SURGE_RUNTIME_TOKEN\" -H 'Content-Type: application/json' \\\n\
+           -d \"{{\\\"id\\\":\\\"sp_verify_$SURGE_RUN_ID\\\",\\\"run_id\\\":\\\"$SURGE_RUN_ID\\\",\\\"parent_span_id\\\":null,\\\"node_id\\\":null,\\\"role\\\":\\\"worker\\\",\\\"started_at\\\":2,\\\"duration_ms\\\":1,\\\"status\\\":\\\"error\\\",\\\"cost\\\":0.0,\\\"depth\\\":0,\\\"policy_decision\\\":null,\\\"body\\\":\\\"verify unit failed — tests red, fixing\\\"}}\" >/dev/null\n\
+         {COMMIT_WORK}\
+         exit 0\n"
+    ))
+    .await;
+    compile(&env).await;
+    let issue = create_issue(&env).await;
+    let run_id = match surge_server::supervisor::dispatch_issue(&env.state, &issue.id).await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(
+        wait_terminal(&env, &run_id, 5_000).await,
+        RunStatus::Succeeded,
+        "an honest mid-run error span is observability, not a verdict (INV-EXEC-3)"
+    );
+
+    wait_lease_released(&env, "iss_1").await;
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Verified);
+
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert!(
+        spans.iter().any(|s| s.id == format!("sp_verify_{run_id}")
+            && s.status == surge_domain::observatory::SpanStatus::Error),
+        "the honest error span is kept, exactly as written (INV-OBS-2): {spans:?}"
+    );
+    let (ok, count) = git_out(env.repo.path(), &["rev-list", "--count", "task/iss_1"]);
+    assert!(ok);
+    assert_eq!(count, "2", "the work landed as a commit on the task branch");
 }
