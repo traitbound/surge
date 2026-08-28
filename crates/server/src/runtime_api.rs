@@ -142,15 +142,8 @@ async fn poll_run(
     Json(run).into_response()
 }
 
-/// Capability 4: append spans. Nothing here transitions orchestration state:
-/// a span append is a record, and the run's status is unchanged by it.
-///
-/// The supervisor's observability floor does later read span *status* when it
-/// decides whether an exit-0 work-order run may be called verified (R1), and
-/// that stays inside INV-EXEC-3 only because the floor is monotone toward
-/// failure — a worker can decline a pass it could already decline by exiting
-/// non-zero, and can never manufacture one. See
-/// `supervisor::worker_reported_error`.
+/// Capability 4: append spans. Span content is observability, never control
+/// flow (INV-EXEC-3) — nothing here transitions orchestration state.
 ///
 /// Two refusals guard the record itself:
 ///

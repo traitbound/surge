@@ -303,8 +303,17 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
     let worktree = work_root.join(&project.id).join(&issue.id);
     let setup = async {
         std::fs::create_dir_all(work_root.join(&project.id))?;
+        // Read HEAD first: `worktree add -B` resets the task branch to it, so
+        // this is exactly the commit the worker starts from and the baseline
+        // the commit floor measures against at run end.
+        let base = git_stdout(&project.repo_path, &["rev-parse", "HEAD"]).ok();
         git(&project.repo_path, &["worktree", "add", "-B", &branch, worktree.to_str().unwrap()])?;
-        Ok::<_, anyhow::Error>(WorktreeGuard { repo: project.repo_path.clone().into(), dir: worktree.clone() })
+        Ok::<_, anyhow::Error>(WorktreeGuard {
+            repo: project.repo_path.clone().into(),
+            dir: worktree.clone(),
+            branch: branch.clone(),
+            base,
+        })
     };
     let guard = match setup.await {
         Ok(g) => g,
@@ -539,39 +548,6 @@ async fn unobserved(state: &AppState, run_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// True when the worker's own spans say the work failed (R1, smoke walk 6).
-///
-/// INV-EXEC-3 says span content is observability, never control flow, and
-/// this reads span content — so the shape matters. It is admissible for
-/// exactly one reason: it is monotone toward failure. It can only turn
-/// `Succeeded` into `Failed`, never the reverse, so it hands the supervised
-/// side no authority it did not already have — a worker that wants to fail
-/// its run can just exit non-zero. The lie INV-EXEC-3 exists to refuse is a
-/// self-reported *pass*, and no arm here can produce one.
-///
-/// Only `Error` counts. `Running` is a span the worker opened and never
-/// closed, which `resolve_dangling_spans` turns into `error` *after* this
-/// runs and which an otherwise-clean run is allowed to have; `Refused` is
-/// Surge declining something, already surfaced on its own paths. Move that
-/// resolution earlier and every dangling span becomes a failed run.
-///
-/// The reserved namespace is excluded in full, not `unobserved`'s three
-/// prefixes: an abort writes `sp_abort_*` with status `error`, and reading
-/// the supervisor's own termination record back as the worker's verdict
-/// would be circular. A store read failure returns false — a failed read
-/// must never manufacture a failure verdict.
-async fn worker_reported_error(state: &AppState, run_id: &str) -> bool {
-    matches!(
-        surge_store::observatory::worst_span_status(
-            &state.pool,
-            run_id,
-            &RESERVED_SPAN_PREFIXES,
-        )
-        .await,
-        Ok(Some(SpanStatus::Error))
-    )
-}
-
 /// Spawn a worker: prompt on stdin, stderr tailed into a channel so a failed
 /// worker's actual error is a visible record, not a discarded pipe
 /// (smoke 2026-08-25, F4; INV-ERR-1).
@@ -727,28 +703,88 @@ async fn unwind_dispatch(
 pub struct WorktreeGuard {
     repo: PathBuf,
     dir: PathBuf,
+    /// The task branch this worktree was created on (INV-EXEC-2).
+    branch: String,
+    /// The commit the task branch was created at, read from the bound repo
+    /// immediately before `worktree add -B` reset the branch to it. `None`
+    /// when that read failed, which makes the commit floor abstain rather
+    /// than guess.
+    base: Option<String>,
 }
 
 impl WorktreeGuard {
+    /// True only when Surge positively observed that the task branch carries
+    /// no commit beyond the one it was created from (R1, smoke walk 6).
+    ///
+    /// Git state is a Surge-observed fact in the INV-EXEC-3 sense: Surge runs
+    /// the command itself against the bound repo and reads the ref store, so
+    /// nothing the supervised side wrote is being trusted. It is also an
+    /// INV-DATA-6-permitted read (git state).
+    ///
+    /// The count comes from the **bound repo**, not from the worktree
+    /// directory: a linked worktree shares the repo's ref store, so the
+    /// branch is readable whether or not the directory still exists — walk 6
+    /// observed task branches outliving their reap. Anything unknowable
+    /// (no recorded base, git read failure, unparseable count) answers
+    /// `false`: a failed read must never manufacture a failure verdict.
+    ///
+    /// **Known limitation, deliberate.** A work order that legitimately
+    /// produces no commit — a pure investigation task — would false-fail
+    /// here. Phase 0 ships no such work-order kind (every work order names a
+    /// task branch and is expected to land on it), so this is acceptable
+    /// now; when work-order kinds broaden, the carve-out belongs on the
+    /// *pipeline node's* declared kind, which Surge compiled and therefore
+    /// observed. It must not become a worker-set "no commit expected" flag —
+    /// that would reopen the self-report hole one field over.
+    fn produced_no_commit(&self) -> bool {
+        let Some(base) = &self.base else { return false };
+        git_stdout(
+            self.repo.to_str().unwrap_or("."),
+            &["rev-list", "--count", &format!("{base}..{}", self.branch)],
+        )
+        .ok()
+        .and_then(|c| c.parse::<u64>().ok())
+        .is_some_and(|commits| commits == 0)
+    }
+
     /// Reap at lease end (INV-EXEC-2).
     fn reap(&self) {
-        if let Err(e) = git(
-            self.repo.to_str().unwrap_or("."),
-            &["worktree", "remove", "--force", self.dir.to_str().unwrap_or("")],
-        ) {
-            eprintln!("worktree reap failed for {:?}: {e}", self.dir);
-        }
+        reap_worktree(&self.repo, &self.dir);
+    }
+}
+
+/// Remove a worktree directory from its repo. A free function so the orphan
+/// cleanup path, which knows a repo and a directory and nothing else, does
+/// not have to fabricate a [`WorktreeGuard`] whose branch and base fields
+/// would be meaningless there.
+///
+/// Note what this does NOT do: it never deletes the task branch. That is
+/// INV-EXEC-2 ("the worktree is reaped", not the branch) and it is what lets
+/// the commit floor read its verdict out of the ref store.
+fn reap_worktree(repo: &std::path::Path, dir: &std::path::Path) {
+    if let Err(e) = git(
+        repo.to_str().unwrap_or("."),
+        &["worktree", "remove", "--force", dir.to_str().unwrap_or("")],
+    ) {
+        eprintln!("worktree reap failed for {dir:?}: {e}");
     }
 }
 
 fn git(repo: &str, args: &[&str]) -> anyhow::Result<()> {
+    git_stdout(repo, args).map(|_| ())
+}
+
+/// The same invocation, with stdout kept — every git call in this module goes
+/// through here, so there is one place where `-C <repo>` is applied and one
+/// place where a non-zero exit becomes an error.
+fn git_stdout(repo: &str, args: &[&str]) -> anyhow::Result<String> {
     let out = std::process::Command::new("git").arg("-C").arg(repo).args(args).output()?;
     anyhow::ensure!(
         out.status.success(),
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    Ok(())
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Watch one worker: child exit → terminal status from the exit code; lease
@@ -815,17 +851,32 @@ async fn monitor(
 
     let now = now_ms();
     // Observability floor (NEW-2, extended by R1): a work-order run that
-    // exits 0 is only `verified` if nothing Surge observed contradicts it.
-    // Exit code alone would flip the issue on two shapes that are
+    // exits 0 is `verified` only if nothing Surge observed contradicts it.
+    // Exit code alone flips the issue on two shapes that are
     // indistinguishable from success with nothing behind it:
     //
     //   * no spans and no heartbeat — the worker never reached Surge (NEW-2);
-    //   * spans that say `error` — the worker reached Surge and reported that
-    //     its own work failed, then exited 0 anyway (R1, smoke walk 6: an
-    //     empty task branch recorded `succeeded` + `verified`, then reaped).
+    //   * nothing committed on the task branch — the worker reached Surge and
+    //     produced no work (R1, smoke walk 6: iss_C's branch was empty, the
+    //     requested file was never created, and Surge recorded `succeeded` +
+    //     `verified` and then reaped the worktree, so the evidence of
+    //     non-work left disk too).
     //
-    // Both floors only ever downgrade, never promote; see
-    // `worker_reported_error` for why reading span status is INV-EXEC-3-clean.
+    // Both derive from facts Surge gathered itself — span count, heartbeat
+    // state, and git refs read out of the bound repo — so both are
+    // INV-EXEC-3-clean, and neither reads what the worker *said*. Span
+    // status deliberately plays no part: `seed/implementer.md` instructs
+    // workers to append a span "carrying the status it earned" and
+    // `seed/doc-writer.md` promises an honest `error` span "costs you
+    // nothing", so failing a run on one would both false-fail the honest
+    // happy path and invert the incentive that buys honest span content.
+    //
+    // ORDERING: this reads `worktree` by reference and the reap below
+    // consumes it, so the borrow checker enforces check-before-reap — move
+    // the reap above this and the crate stops compiling rather than the
+    // floor silently going inert. (The read would in fact survive a reap,
+    // since it goes to the repo's ref store; the ordering is belt and
+    // braces.)
     let (status, reason) = match (status, &issue_id) {
         (RunStatus::Succeeded, Some(_)) if unobserved(&state, &run_id).await => (
             RunStatus::Failed,
@@ -835,15 +886,19 @@ async fn monitor(
                     .to_string(),
             ),
         ),
-        (RunStatus::Succeeded, Some(_)) if worker_reported_error(&state, &run_id).await => (
-            RunStatus::Failed,
-            Some(
-                "worker exited 0 but its own spans report an error — the work it described \
-                 did not succeed, so the issue is not verified; read the run in the \
-                 Observatory, then retry or amend the work order"
-                    .to_string(),
-            ),
-        ),
+        (RunStatus::Succeeded, Some(_))
+            if worktree.as_ref().is_some_and(|w| w.produced_no_commit()) =>
+        {
+            (
+                RunStatus::Failed,
+                Some(
+                    "worker exited 0 but left no commit on the task branch — nothing was \
+                     produced, so the issue is not verified; read the run in the Observatory, \
+                     then retry or amend the work order"
+                        .to_string(),
+                )
+            )
+        }
         (s, _) => (s, reason),
     };
     // If an abort already landed, it stands (finish_run_if_running is guarded).
@@ -1122,7 +1177,7 @@ async fn reap_orphan_worktree(state: &AppState, project_id: &str, issue_id: &str
         eprintln!("worktree {dir:?} left in place: project {project_id} is gone");
         return;
     };
-    WorktreeGuard { repo: project.repo_path.into(), dir }.reap();
+    reap_worktree(std::path::Path::new(&project.repo_path), &dir);
 }
 
 /// Terminalize every run still marked `running`, with one reason. Shared by
