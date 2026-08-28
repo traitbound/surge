@@ -13,13 +13,16 @@ This is the load-bearing epic (diagnostic Q2) and runs first for the same reason
 
 ## In scope
 
-1. **Pipeline editor core**: React Flow canvas, six node kinds, edges with triggers and required-gate locks, multi-select, undo/redo (design §11). *Not* grouping/blocks — those are 1.3.
-2. **Two-way code sync**: canvas ⇄ textual pipeline representation (the Phase 0 data format becomes the paste/round-trip format). Hash inputs per INV-ID-2: semantic content only, presentation state never hashed.
-3. **Pipeline versioning**: fork with provenance, version history, blessed flag (INV-DATA-3); project-local edits create a local revision hash immediately, promote-to-fork adopts it (INV-ID-3, design §23-Nine). The history *surface* (list, diff view) is 1.3; the identity machinery is here.
+1. **Pipeline editor core**: React Flow canvas, all six node kinds **rendered and round-tripped**, edges with triggers and required-gate locks, multi-select, undo/redo (design §11).
+   *Clarified 2026-08-28 during spec grounding:* `NodeConfig::Block` is one of the six kinds in the domain (`crates/domain/src/pipeline.rs:76-81`) and its `members`/`exposed_params` are hashed (`crates/compiler/src/hash.rs:38`). A Block node must therefore render, load, save and hash correctly **here** — the round-trip contract is not satisfiable with a kind missing. What moves to 1.3 is the *authoring UX*: composing a block from a selection, collapse/expand affordances, exposing parameters, palette publish. In 1.1 a Block renders as one opaque node and survives edit/save unchanged.
+2. **Pipeline read/write API**: `crates/server/src/human_api.rs` exposes **no** pipeline route today (verified 2026-08-28 — the router carries projects, issues, runs, audit and compile only), while `crates/store/src/pipelines.rs` already has `insert_graph`/`load_graph`. The canvas needs that seam; it is in this epic, not assumed.
+3. **UI scaffolding**: `ui/package.json` has exactly two dependencies today, `react` and `react-dom`. React Flow (`@xyflow/react`), TanStack Router/Query and Tailwind are *decisions* in CLAUDE.md and marked **(P1)** in the code map — none is installed. That cost lands here.
+4. **Two-way code sync**: canvas ⇄ textual pipeline representation (the Phase 0 data format becomes the paste/round-trip format). Hash inputs per INV-ID-2: semantic content only, presentation state never hashed.
+5. **Pipeline versioning**: fork with provenance, version history, blessed flag (INV-DATA-3); project-local edits create a local revision hash immediately, promote-to-fork adopts it (INV-ID-3, design §23-Nine). The history *surface* (list, diff view) is 1.3; the identity machinery is here.
 
 ## Out of scope
 
-- Grouping/blocks with exposed parameters → 1.3 (deliberately: it is the parent's named first cut, and must not sit in the epic that proves the thesis)
+- Block **authoring UX** — composing from a selection, collapse/expand, exposed parameters, palette publish → 1.3 (deliberately: the parent's named first cut must not sit in the epic that proves the thesis). Block *rendering and round-trip* stay here; see in-scope 1
 - Library, trust, compile dialog, upgrade review → 1.2
 - Pipelines page, project overview, canvas modes, EVAL tab → 1.3
 - Everything in the parent's whole-phase Out of scope
@@ -27,8 +30,8 @@ This is the load-bearing epic (diagnostic Q2) and runs first for the same reason
 ## Done when
 
 - A pipeline drawn from scratch on the canvas compiles to the same hash as its pasted textual form (INV-ID-2).
-- Moving nodes, adding frames or adding stickies changes **no** hash — proved by asserting hash equality across a presentation-only mutation, not by inspecting the serializer.
-- Editing a project canvas immediately shows `vN + local rev <hash>` on the assignment line; promote-to-fork names that revision as the fork's provenance (INV-ID-3).
+- Moving a node or renaming its label changes **no** hash — proved on the payload the **canvas produces after a UI mutation**, not on the compiler's own fixtures. *(Amended 2026-08-28, spec review: frames and stickies dropped from this line — they have no domain type, no table and no owning spec, and belong with the annotate palette in 1.3. The compiler-level version of this assertion is already green at `crates/compiler/tests/compile.rs:48`, so a canvas AC that stops there proves nothing about the canvas.)*
+- Editing a project canvas immediately shows `vN + local rev <hash>` on the assignment line; promote-to-fork names that revision as the fork's provenance (INV-ID-3). *(Decided 2026-08-28: the canvas **commits on mutation** — there is no browser-side unsaved buffer. A buffered model would leave a project reading plain `vN` while local edits existed, which INV-ID-3 forbids in as many words.)*
 - Forking a blessed template, editing the fork and compiling leaves the template's hash and history untouched.
 - Round-tripping canvas → text → canvas → text produces byte-identical text on the second pass for every one of the six node kinds.
 
@@ -66,9 +69,19 @@ graph TB
 
 | Feature | Hint |
 |---|---|
-| canvas-editor | React Flow, six node kinds, edges/gates, selection, undo/redo |
-| code-roundtrip | canvas ⇄ text format, hash-fidelity contract, byte-identical second pass |
-| pipeline-versioning | fork, provenance, local revision hash, blessed flag (identity machinery, not the history UI) |
+| pipeline-versioning | fork, provenance, **local revision entity**, blessed flag (identity machinery, not the history UI) — **spec'd first** |
+| canvas-editor | React Flow, six node kinds (Block opaque), palette creation, edges/gates, selection, undo/redo, the pipeline HTTP seam, UI scaffolding |
+| code-roundtrip | canvas ⇄ text format, hash-fidelity contract, byte-identical second pass, id minting, lossy `EdgeTrigger::parse` |
+
+**Spec order inverted 2026-08-28.** The list was authored canvas-first. Grounding the canvas spec established that commit-on-mutation is what INV-ID-3 requires, which makes the project-local revision entity a *prerequisite* of the canvas rather than a consequence of it. `pipeline-versioning` is spec'd first.
+
+## Known defects this epic must own
+
+| Defect | Evidence | Owner |
+|---|---|---|
+| **`EdgeTrigger` round-trips lossily, and it changes the hash.** `EdgeTrigger::Custom("passed")` serializes to JSON as `{"custom":"passed"}` but persists via `as_str()` as the bare string `"passed"` (`crates/store/src/pipelines.rs:57`) and reloads through `parse()` as the unit variant `Passed` (`crates/domain/src/pipeline.rs:154-166`). Those two produce different `SemanticEdge` JSON and therefore different `pipeline_content_hash` values — so a pipeline with a custom trigger colliding with a reserved word changes identity across save/reload | found during canvas-editor spec review, 2026-08-28 | `code-roundtrip` |
+
+Latent in phase 0 because pipelines are seeded, never authored. The canvas is what exposes it.
 
 ## Scoping assumptions
 
