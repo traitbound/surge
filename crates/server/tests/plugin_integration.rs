@@ -52,7 +52,9 @@ async fn live() -> Live {
             id: "pl_p".into(),
             name: "p".into(),
             version: 1,
-            content_hash: "sha256:pipe".into(),
+            // Empty graph, but a real identity: no pipeline row anywhere
+            // carries a hash that is not its graph's (INV-ID-2, ESC-1).
+            content_hash: surge_compiler::pipeline_content_hash(&[], &[]),
             blessed: false,
             forked_from: None,
             created_at: 1,

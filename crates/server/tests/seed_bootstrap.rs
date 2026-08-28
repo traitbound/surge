@@ -38,7 +38,10 @@ async fn seed_is_idempotent_across_boots() {
         .await.unwrap().unwrap().created_at;
 
     // The fixture pipeline graph is data a fresh instance can compile.
-    let (p, n, e) = surge_domain::fixtures::two_node_pipeline();
+    let (n, e) = surge_domain::fixtures::two_node_graph();
+    let p = surge_domain::fixtures::two_node_pipeline(
+        surge_compiler::pipeline_content_hash(&n, &e),
+    );
     let (p2, n2, e2) = surge_store::pipelines::load_graph(&pool, &p.id).await.unwrap();
     assert_eq!(p2, p);
     assert_eq!(n2.len(), n.len());
@@ -49,6 +52,11 @@ async fn seed_is_idempotent_across_boots() {
     let again = surge_store::library::get(&pool, LibraryItemKind::Subagent, "doc-writer", 1)
         .await.unwrap().unwrap();
     assert_eq!(again.created_at, created, "existing rows are left untouched (INV-DATA-2)");
+    // Same for the pipeline row: the seed derives `content_hash` before the
+    // insert and there is no update path, so a second boot cannot restate a
+    // published version's identity (INV-DATA-3).
+    let (p3, _, _) = surge_store::pipelines::load_graph(&pool, &p.id).await.unwrap();
+    assert_eq!(p3, p2, "a published version is never rewritten by a later boot");
     let seeded: Vec<_> = surge_store::audit::recent(&pool, 20).await.unwrap()
         .into_iter().filter(|e| e.action == "library.seeded").collect();
     assert_eq!(seeded.len(), 1, "library.seeded is audited only on first seed");
@@ -91,4 +99,27 @@ async fn seeded_pipeline_compiles_cleanly() {
     assert_eq!(r.status(), StatusCode::OK, "a fresh seeded instance compiles out of the box");
     assert!(repo.path().join(".claude/agents/doc-writer.md").is_file());
     assert!(repo.path().join(".claude/skills/write-summary/SKILL.md").is_file());
+}
+
+/// ESC-1 regression (INV-ID-2). The seeded pipeline's `content_hash` was a
+/// literal placeholder — `sha256:fixture-two-node-v1` — so the column every
+/// phase-1 feature treats as the graph's identity meant nothing. The assertion
+/// is deliberately made against the graph *read back from the store*, not
+/// against the in-memory fixture: identity has to survive persistence, and a
+/// lossy round-trip (an `EdgeTrigger` that reloads as a different variant, say)
+/// must show up here as a hash mismatch.
+#[tokio::test]
+async fn seeded_pipeline_row_carries_its_own_content_hash() {
+    let pool = surge_store::open_in_memory().await.unwrap();
+    bootstrap_seed(&pool).await.unwrap();
+
+    let (row, nodes, edges) =
+        surge_store::pipelines::load_graph(&pool, surge_domain::fixtures::TWO_NODE_PIPELINE_ID)
+            .await
+            .unwrap();
+    assert_eq!(
+        row.content_hash,
+        surge_compiler::pipeline_content_hash(&nodes, &edges),
+        "the persisted content_hash must be the hash of the persisted graph"
+    );
 }

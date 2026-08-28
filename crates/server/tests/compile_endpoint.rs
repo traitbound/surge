@@ -27,7 +27,10 @@ async fn setup() -> (AppState, String, tempfile::TempDir) {
         created_at: 1,
     };
     surge_store::projects::insert(&pool, &project).await.unwrap();
-    let (p, n, e) = surge_domain::fixtures::two_node_pipeline();
+    let (n, e) = surge_domain::fixtures::two_node_graph();
+    let p = surge_domain::fixtures::two_node_pipeline(
+        surge_compiler::pipeline_content_hash(&n, &e),
+    );
     surge_store::pipelines::insert_graph(&pool, &p, &n, &e).await.unwrap();
     for (kind, name, body) in [
         (surge_domain::library::LibraryItemKind::Subagent, "doc-writer", "Write the doc."),
