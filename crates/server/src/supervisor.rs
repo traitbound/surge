@@ -736,6 +736,20 @@ impl WorktreeGuard {
     /// *pipeline node's* declared kind, which Surge compiled and therefore
     /// observed. It must not become a worker-set "no commit expected" flag —
     /// that would reopen the self-report hole one field over.
+    ///
+    /// **The converse is forgeable and deliberately not defended.** A worker
+    /// can satisfy this floor with `git commit --allow-empty`. That is not a
+    /// regression — before this arm there was no floor at all — and it is not
+    /// what walk 6 hit, but it is the honest limit of the signal: the floor
+    /// catches a run that did nothing, not a run that pretended. Defending it
+    /// means judging work product, which is Gate-2 review's job, not the
+    /// supervisor's.
+    ///
+    /// Why this is not INV-EXEC-3 control flow: Surge runs the git command
+    /// itself, so the count is observed rather than reported. The arm is also
+    /// monotone toward failure — it can only downgrade `Succeeded`, never
+    /// manufacture a pass — so a worker gains no outcome it could not already
+    /// reach by exiting non-zero.
     fn produced_no_commit(&self) -> bool {
         let Some(base) = &self.base else { return false };
         git_stdout(
