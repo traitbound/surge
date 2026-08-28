@@ -349,13 +349,44 @@ async fn claim_lease(
         .await;
     }
     let now = now_ms();
+    let owner = match &identity {
+        Identity::Human => "interactive".to_string(),
+        Identity::Runtime { project_id, .. } => format!("rt:{project_id}"),
+    };
     let mat = match surge_store::materializations::fresh_for_project(&state.pool, &issue.project_id).await
     {
         Ok(Some(m)) => m,
+        // INV-ID-1's refusal, on the interactive path. It used to be this
+        // bare 409 — no run, no span, no audit entry — while the branch 20
+        // lines below (lease already held, walk 4 S3) wrote all three, and
+        // `dispatch_issue` wrote all three for the identical condition. A
+        // refused claim is a refusal (INV-ERR-1: run + reason span) AND a
+        // declined privileged act (INV-OBS-1: audit entry naming the
+        // claimant), so it owes both — built by the supervisor's one shared
+        // refusal builder, not a second copy here (ESC-2, walk 3 N1/N6/N13).
         Ok(None) => {
-            return (StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": "no fresh materialization; compile first (INV-ID-1)" })))
-                .into_response()
+            let reason = "lease claim refused — no fresh materialization; compile first (INV-ID-1)";
+            let refusal = crate::supervisor::Refusal {
+                project_id: &issue.project_id,
+                work: crate::supervisor::RefusedWork::WorkOrder {
+                    issue_id: &issue.id,
+                    work_order_hash: &issue.work_order_hash,
+                },
+                materialization_hash: "none",
+                reason,
+                audit_action: "lease.claim_refused",
+                audit_actor: &owner,
+            };
+            return match crate::supervisor::refusal_run(&state, refusal).await {
+                Ok(run_id) => (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({ "run_id": run_id, "error": reason })),
+                )
+                    .into_response(),
+                // The record is the refusal's whole point; failing to write
+                // it must not be answered as if it had been written.
+                Err(e) => internal(e, "claim refusal record failed"),
+            };
         }
         Err(e) => return internal(e, "materialization lookup failed"),
     };
@@ -375,10 +406,6 @@ async fn claim_lease(
     if let Err(e) = surge_store::observatory::insert_run(&state.pool, &run).await {
         return internal(e, "run insert failed");
     }
-    let owner = match &identity {
-        Identity::Human => "interactive".to_string(),
-        Identity::Runtime { project_id, .. } => format!("rt:{project_id}"),
-    };
     match surge_store::issues::claim_lease(
         &state.pool, &issue_id, &owner, &run_id, now, state.supervisor.lease_ttl_ms,
     )
@@ -403,7 +430,13 @@ async fn claim_lease(
                 &state.pool, "lease.claim_refused", &issue_id, &owner, Some(&issue.project_id), now,
             )
             .await;
-            return (StatusCode::CONFLICT, Json(serde_json::json!({ "error": reason })))
+            // Additive, and the same body its sibling refusal above answers
+            // with: a refusal names the run that records it, so the caller
+            // can go read the span rather than only see a string.
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "run_id": run_id, "error": reason })),
+            )
                 .into_response();
         }
         Err(e) => return internal(e, "lease claim failed"),

@@ -460,7 +460,24 @@ use crate::supervisor::abort_run as surge_server_abort;
 
 async fn dispatch_doc_run(State(state): State<AppState>, Path(project_id): Path<String>) -> Response {
     match crate::supervisor::dispatch_doc_run(&state, &project_id).await {
-        Ok(run_id) => Json(serde_json::json!({ "run_id": run_id })).into_response(),
+        Ok(crate::supervisor::DispatchOutcome::Spawned { run_id }) => {
+            Json(serde_json::json!({ "run_id": run_id })).into_response()
+        }
+        // Same body shape the issue-dispatch refusal answers with, so a
+        // client reads one contract: the refusal names the run that records
+        // it and carries the reason (ESC-2, INV-ERR-1).
+        Ok(crate::supervisor::DispatchOutcome::Refused { run_id, reason }) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "run_id": run_id, "refused": true, "error": reason })),
+        )
+            .into_response(),
+        // A doc run has no issue, so `NotFound` — the issue-typo shape — is
+        // not reachable here; an unknown project is still the `anyhow` path.
+        Ok(crate::supervisor::DispatchOutcome::NotFound { reason }) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "run_id": null, "refused": true, "error": reason })),
+        )
+            .into_response(),
         Err(e) => internal(e, "doc run dispatch failed"),
     }
 }

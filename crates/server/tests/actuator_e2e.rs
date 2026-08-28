@@ -311,6 +311,84 @@ async fn stale_materialization_refuses_with_a_visible_run() {
     assert!(spans[0].body.as_deref().unwrap().contains("compile first"));
 }
 
+/// ESC-2 / INV-ERR-1: the doc-run dispatch path makes the SAME freshness
+/// check `dispatch_issue` does, and used to answer it with a bare `anyhow!`
+/// that `human_api::internal` flattened into `500 {"error":"doc run dispatch
+/// failed"}` — no run, no span, no audit entry, the reason on the server's
+/// stderr only. A doc run has no issue and no work-order hash (the `run.kind`
+/// CHECKs in 0002_object_model.sql), so the refusal record must be a valid
+/// `doc` run row. The allowed side of this constraint is
+/// `the_doc_run_prompt_is_scoped_to_the_doc_node`, which dispatches after a
+/// compile.
+#[tokio::test]
+async fn doc_run_without_fresh_materialization_refuses_with_a_visible_run() {
+    let env = setup("#!/bin/sh\nexit 0\n").await; // no compile → nothing fresh
+    let (run_id, reason) =
+        match surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.unwrap() {
+            surge_server::supervisor::DispatchOutcome::Refused { run_id, reason } => (run_id, reason),
+            other => panic!("expected refusal, got {other:?}"),
+        };
+    assert!(reason.contains("compile first"), "{reason}");
+
+    let run = surge_store::observatory::get_run(&env.state.pool, &run_id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Refused);
+    // A valid `doc` run row, not a work-order one wearing a doc label.
+    assert_eq!(run.kind, surge_domain::observatory::RunKind::Doc);
+    assert!(run.issue_id.is_none() && run.work_order_hash.is_none(),
+        "a doc run carries neither an issue nor a work-order hash: {run:?}");
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert_eq!(spans.len(), 1, "the refusal run carries one span with the reason (INV-ERR-1)");
+    assert!(spans[0].body.as_deref().unwrap().contains("compile first"), "{spans:?}");
+    let audit = surge_store::audit::recent(&env.state.pool, 50).await.unwrap();
+    assert!(audit.iter().any(|a| a.action == "dispatch.refused"
+        && a.project_id.as_deref() == Some("prj_fix")
+        && a.subject.contains("compile first")),
+        "audited with its reason and its project (INV-ERR-1, N13): {audit:?}");
+    // Nothing was spawned: the bound repo is untouched (INV-DATA-1).
+    assert!(!env.repo.path().join(".claude").exists());
+}
+
+/// ESC-2 / INV-ERR-1 + INV-OBS-1: the interactive claim path (INV-AUTH-1's
+/// fifth capability) refuses an uncompiled project with a bare 409 body — no
+/// run, no span, no audit entry — while its own sibling branch (lease already
+/// held, walk 4 S3) writes all three for the same endpoint. A refused claim is
+/// both a refusal and a declined privileged act, so it owes both records. The
+/// allowed side of this constraint is
+/// `runtime_capabilities_fetch_claim_heartbeat`, which claims after a compile.
+#[tokio::test]
+async fn interactive_claim_without_fresh_materialization_refuses_visibly() {
+    let env = setup("#!/bin/sh\nexit 0\n").await; // no compile → nothing fresh
+    let issue = create_issue(&env).await;
+    let rt = surge_store::tokens::rotate_project_runtime(
+        &env.state.pool, "prj_fix", surge_server::now_ms())
+        .await.unwrap().plaintext;
+
+    let (code, body) =
+        reqwest_lite(&format!("{}/runtime/issues/{}/claim", env.api_base, issue.id), &rt, true).await;
+    assert_eq!(code, 409, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(v["error"].as_str().unwrap().contains("compile first"), "{body}");
+    let run_id = v["run_id"].as_str().expect("the refusal names the run recording it").to_string();
+
+    let run = surge_store::observatory::get_run(&env.state.pool, &run_id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Refused);
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert_eq!(spans.len(), 1, "the refusal run carries one span with the reason (INV-ERR-1)");
+    assert!(spans[0].body.as_deref().unwrap().contains("compile first"), "{spans:?}");
+    // INV-OBS-1: the declined privileged act names itself and its claimant,
+    // not `dispatch.refused`/`human` — this was not the supervisor dispatching.
+    let audit = surge_store::audit::recent(&env.state.pool, 50).await.unwrap();
+    assert!(audit.iter().any(|a| a.action == "lease.claim_refused"
+        && a.actor == "rt:prj_fix"
+        && a.project_id.as_deref() == Some("prj_fix")
+        && a.subject.contains("compile first")),
+        "audited as a refused claim, with claimant and reason (INV-OBS-1): {audit:?}");
+    // The refusal takes nothing: no lease moved, the issue stays claimable.
+    let issue = surge_store::issues::get(&env.state.pool, &issue.id).await.unwrap().unwrap();
+    assert!(issue.lease.is_none(), "a refused claim holds no lease");
+    assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Eligible);
+}
+
 #[tokio::test]
 async fn silent_worker_is_reclaimed_at_ttl() {
     let env = setup("#!/bin/sh\nsleep 30\n").await;
@@ -918,7 +996,10 @@ async fn the_doc_run_prompt_is_scoped_to_the_doc_node() {
     // The worker runs in the bound repo itself; it captures its own prompt.
     let env = setup("#!/bin/sh\ncat > prompt.txt\nexit 0\n").await;
     compile(&env).await;
-    let run_id = surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.unwrap();
+    let run_id = match surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        other => panic!("expected spawn, got {other:?}"),
+    };
     assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Succeeded);
 
     let prompt = std::fs::read_to_string(env.repo.path().join("prompt.txt")).unwrap();
@@ -1057,3 +1138,4 @@ async fn an_honest_error_span_with_a_commit_still_verifies() {
     assert!(ok);
     assert_eq!(count, "2", "the work landed as a commit on the task branch");
 }
+
