@@ -1,6 +1,6 @@
 // Observatory — phase 0's minimal runs list (design §16 subset): runs
 // newest-first with status pills, an expandable span tree per run (role,
-// timing, status, cost, policy string), Abort on a running run, and the
+// timing, status, cost (not measured in phase 0 — see S8), policy string), Abort on a running run, and the
 // refusal span shown prominently on refused runs. Read-only polling; the
 // waterfall, COE and metrics rail land in phase 3.
 
@@ -56,7 +56,7 @@ function SpanRow({ span }: { span: Span }) {
           <span className="mono">
             {span.duration_ms !== null ? duration(Number(span.duration_ms)) : "—"}
           </span>
-          <span className="mono faint">${span.cost.toFixed(3)}</span>
+          <span className="mono faint" title="Cost is not measured in phase 0 — the INV-EXEC-3 meter ships in phase 2 (smoke walk 5, S8)">cost n/m</span>
           <span className={`pill ${pill.cls}`}>{pill.text}</span>
         </span>
       </div>
@@ -133,7 +133,7 @@ function RunRow({ run, onAborted }: { run: Run; onAborted: () => void }) {
           </span>
           <span>{relativeTime(started)}</span>
           <span className="mono">{ended !== null ? duration(ended - started) : "—"}</span>
-          <span className="mono faint">${run.cost.toFixed(3)}</span>
+          <span className="mono faint" title="Cost is not measured in phase 0 — the INV-EXEC-3 meter ships in phase 2 (smoke walk 5, S8)">cost n/m</span>
           {run.status === "running" && (
             <button className="danger" onClick={abort} disabled={aborting}>
               Abort run
