@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, name, repo_path, pipeline_status, surge_yaml_written, tracker,\n                branch_format, created_at\n         FROM project ORDER BY created_at DESC, id",
+  "query": "SELECT id, name, repo_path, surge_yaml_written, tracker,\n                branch_format, created_at,\n                EXISTS(SELECT 1 FROM materialization m\n                       WHERE m.project_id = project.id AND m.fresh = 1) AS has_fresh\n         FROM project WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -37,19 +37,8 @@
         }
       },
       {
-        "name": "pipeline_status",
-        "ordinal": 3,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "project",
-            "name": "pipeline_status"
-          }
-        }
-      },
-      {
         "name": "surge_yaml_written",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -60,7 +49,7 @@
       },
       {
         "name": "tracker",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -71,7 +60,7 @@
       },
       {
         "name": "branch_format",
-        "ordinal": 6,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -82,7 +71,7 @@
       },
       {
         "name": "created_at",
-        "ordinal": 7,
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -90,10 +79,16 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "name": "has_fresh",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": "Expression"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
@@ -106,5 +101,5 @@
       false
     ]
   },
-  "hash": "18a9001fd5396518ac17a67d1c85f0a88e4c68d820261536db3928d7d5f5f580"
+  "hash": "d53753b3efe1ab9ac64caedeb78a04a19b3a8f95b1316f477780f31966543b5f"
 }

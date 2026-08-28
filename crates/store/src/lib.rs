@@ -505,6 +505,55 @@ mod object_model_tests {
         assert!(crate::audit::recent(&pool, 10).await.unwrap().iter().any(|a| a.action == "pipeline.compiled"));
     }
 
+    /// ESC-3 / INV-ID-1: `Project::pipeline_status` is a *derived* view of the
+    /// one signal dispatch actually checks — `materialization.fresh` — not a
+    /// stored column. The stored column had no writer anywhere in the tree, so
+    /// every project read back `Published` and the Registry pill described a
+    /// state the system could not produce.
+    #[tokio::test]
+    async fn pipeline_status_is_derived_from_materialization_freshness() {
+        let pool = crate::open_in_memory().await.unwrap();
+        seed_project_and_pipeline(&pool).await; // a project, never compiled
+
+        let uncompiled = crate::projects::get(&pool, "prj_fixture").await.unwrap().unwrap();
+        assert_eq!(
+            uncompiled.pipeline_status,
+            surge_domain::project::PipelineAssignmentStatus::NotCompiled,
+            "a project with no fresh materialization must not report a compiled \
+             status — dispatch refuses it (INV-ID-1)"
+        );
+        let listed = crate::projects::list(&pool).await.unwrap();
+        assert_eq!(
+            listed[0].pipeline_status, uncompiled.pipeline_status,
+            "list and get must not disagree about the same project"
+        );
+
+        // Compile: one fresh materialization for this project.
+        crate::materializations::insert_fresh_committed(&pool, &surge_domain::materialization::Materialization {
+            id: "mk_esc3".into(),
+            content_hash: "sha256:esc3".into(),
+            cache_key: "mk_esc3..fixture".into(),
+            pipeline_id: "pl_two_node_v1".into(),
+            project_id: "prj_fixture".into(),
+            signed_by: "st_test".into(),
+            fresh: true,
+            created_at: 1,
+        })
+        .await
+        .unwrap();
+
+        let compiled = crate::projects::get(&pool, "prj_fixture").await.unwrap().unwrap();
+        assert_eq!(
+            compiled.pipeline_status,
+            surge_domain::project::PipelineAssignmentStatus::Published,
+            "a fresh materialization exists — the project passes the INV-ID-1 check"
+        );
+        assert_eq!(
+            crate::projects::list(&pool).await.unwrap()[0].pipeline_status,
+            surge_domain::project::PipelineAssignmentStatus::Published
+        );
+    }
+
     #[tokio::test]
     async fn audit_appends_and_reads_back() {
         let pool = crate::open_in_memory().await.unwrap();

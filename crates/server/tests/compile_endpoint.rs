@@ -97,6 +97,52 @@ async fn compile_writes_files_and_records_materialization() {
     assert_eq!(actions.iter().filter(|a| *a == "pipeline.compiled").count(), 2);
 }
 
+/// ESC-3 / INV-ID-1: the badge the Registry renders is the same fact dispatch
+/// gates on, over the wire. Before this, `pipeline_status` came from a column
+/// nothing ever wrote, so this read "published" on a project that had never
+/// compiled and whose every dispatch would be refused. Compiling is the event
+/// that makes dispatch legal, so it is the event that must flip the badge.
+#[tokio::test]
+async fn compiling_flips_the_reported_pipeline_status() {
+    let (state, session, _repo) = setup().await;
+    let router = app(state.clone());
+
+    let status = |router: axum::Router, session: String| async move {
+        let r = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/projects")
+                    .header(header::AUTHORIZATION, format!("Bearer {session}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&r.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        body[0]["pipeline_status"].as_str().unwrap().to_string()
+    };
+
+    assert_eq!(
+        status(router.clone(), session.clone()).await,
+        "not_compiled",
+        "never compiled → dispatch would be refused (INV-ID-1), and the card must say so"
+    );
+    assert!(surge_store::materializations::fresh_for_project(&state.pool, "prj_fix")
+        .await.unwrap().is_none(), "precondition: nothing fresh yet");
+
+    let r = router.clone().oneshot(compile_req(&session)).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    assert_eq!(
+        status(router, session).await,
+        "published",
+        "a fresh materialization exists → the card must stop warning"
+    );
+}
+
 #[tokio::test]
 async fn untrusted_import_hard_blocks_compile() {
     let (state, session, repo) = setup().await;
