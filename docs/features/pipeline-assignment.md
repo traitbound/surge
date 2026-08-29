@@ -11,7 +11,9 @@
 
 Which pipeline version a project runs. The schema column, the domain type and three UI sites that render it already exist; the write does not, and `projects::insert` actively refuses one. This feature closes that gap, gives the operator surfaces to use it from, and makes the stored fact consequential by letting compile default to it.
 
-**It does not add a state to `PipelineAssignmentStatus`.** An earlier draft added `Unassigned`. That was wrong: dispatch gates on materialization freshness alone and never reads assignment, so an assignment-gated badge would assert a dispatch verdict the supervisor contradicts — the defect ESC-3 removed, one level up. Status keeps meaning **dispatchability**; "unassigned" is already on the wire as `assigned_pipeline === null`.
+**On the status enum, two different answers.** An earlier draft added `Unassigned`; that was wrong, because dispatch gates on materialization freshness alone and never reads assignment, so an assignment-gated badge would assert a dispatch verdict the supervisor contradicts. "Unassigned" stays off the enum — it is already on the wire as `assigned_pipeline === null`.
+
+But this feature **does** add `Stale`, because it is this feature that makes `Stale` producible. AC 4's staling leaves a project with materializations of which none is fresh — precisely the state `crates/domain/src/project.rs:44-48` records as `Stale`'s trigger. ESC-3's rule was "a variant when something can produce it, not before"; this is the something. Unlike `Unassigned`, it does not contradict dispatch: `Stale` and `NotCompiled` both mean no fresh materialization and both refuse dispatch — the variant refines *why*, not *whether*.
 
 ## User-facing behaviour
 
@@ -24,12 +26,12 @@ Assigning something that does not exist is refused by name, recorded, and leaves
 ## Acceptance criteria
 
 1. Assigning a pipeline version to a project records it, and both project read paths return it as `assigned_pipeline`; a project with none returns `null`.
-2. An assignment and its audit entry (`project.pipeline_assigned`) are atomic — neither can be observed without the other (INV-OBS-1, INV-DATA-8).
+2. An assignment, its audit entry (`project.pipeline_assigned`) and any staling it causes under AC 4 are atomic — no subset of the three is observable (INV-OBS-1, INV-DATA-8).
 3. Assigning with an unknown pipeline id, or against an unknown project, is refused with a named error **and an audit record**, and leaves all project state unchanged (INV-ERR-1).
-4. **Staling predicate:** an assignment write stales the project's fresh materialization *unless* that materialization was compiled from the pipeline being assigned. Re-assigning the pipeline already assigned is a no-op — no state change, no audit row. Consequence: assigning to a project whose fresh materialization already matches does **not** knock it out of `published`.
+4. **Staling predicate**, stated once and total over every case: *any* assignment write — including re-asserting the pipeline already assigned — stales the project's fresh materialization **unless that materialization was compiled from the pipeline being assigned**. An assignment write that changes neither the assignment nor the materialization writes no audit row. Consequence: assigning a project whose fresh materialization already matches does **not** knock it out of `published`; re-asserting an assignment whose materialization does *not* match **does** stale, because the mismatch is the thing that matters, not whether the assignment value moved.
 5. Compile with no pipeline id compiles the assigned pipeline; with an explicit id, that one; with neither an assignment nor an id, it is refused with a visible record naming what is absent (INV-ERR-1).
-6. Both project read paths report `compiled_from` — the pipeline the fresh materialization was built from, `null` when there is none — and it is correct when it differs from `assigned_pipeline`. Where they differ, the project detail names both.
-7. Every hook in the smoke checklist is reachable from a shipped surface: a **second seeded pipeline** so two versions exist to move between, `surge assign <project> <pipeline>`, and `GET /api/pipelines`.
+6. Both project read paths report `compiled_from` — the pipeline the fresh materialization was built from, `null` when there is none — and it is correct when it differs from `assigned_pipeline`. Where they differ, the project card's **pipeline line** (`ui/src/registry.tsx:272-276`) names both. The switcher is out of scope — it shows the assignment only.
+7. Every hook in the smoke checklist is reachable from a shipped surface: a **second seeded pipeline** (a distinct pipeline, not a second version of the seeded one, so the card and switcher visibly change name *and* version), `surge assign <project> <pipeline>`, **`surge compile` with its pipeline argument made optional**, and `GET /api/pipelines`.
 
 ## Component design
 
@@ -39,7 +41,7 @@ Only the decisions an implementer should not have to re-derive. Mechanism is the
 
 **`compiled_from` is a reference, not an assignment.** It must not reuse the `AssignedPipeline` type name for a value that is not an assignment (INV-NAME-1). A neutral shared shape carrying pipeline id, name, version and content hash serves both fields.
 
-**Multiplicity hazard, stated because it is easy to miss:** nothing in the schema enforces one fresh materialization per project — only `cache_key` is unique, and the freshness discipline lives in a repository function that `phase.md`'s known-defects table already records as falsifiable. Whatever expresses `compiled_from` must be immune to two fresh rows producing two projects.
+**Multiplicity, stated precisely:** nothing in the *schema* enforces one fresh materialization per project — only `cache_key` is unique and the sole index is `span_by_run`. In practice two-fresh is **not producible**: `insert_fresh` stales all prior fresh rows before every insert. So this is a latent schema gap, not a live bug, and `compiled_from` may assume singularity — but whatever expresses it should not *silently multiply projects* if the assumption is ever broken. If a tie must be broken, newest by `created_at` wins.
 
 **Assignment does not gate dispatch.** The supervisor decides on freshness alone, and this feature does not change that. AC 4's staling therefore forces a recompile; it does not guarantee the running graph is the assigned one. That is why AC 6 exists — the honest response to a divergence the system permits is to name it, not to claim it cannot happen.
 
@@ -55,7 +57,7 @@ Only the decisions an implementer should not have to re-derive. Mechanism is the
 
 - The assign **picker dialog** and the pipelines page — 1.3. Operator access here is the CLI and the API.
 - Project-local revisions, forking, promote-to-fork, history, diff.
-- Making `Stale` producible — status stays two-valued; `Stale` returns with `pipeline-revisions` (§23-Twenty-Two).
+- ~~Making `Stale` producible~~ — **retracted.** AC 4's staling makes it producible here, so this feature owns the variant rather than leaving a badge that says "not compiled" about a project that has compiled. §23-Twenty-Two and `crates/domain/src/project.rs:38-48` both anticipated this trigger and named `pipeline-revisions` as the expected owner; the trigger arrived one spec earlier.
 - Refusing an explicit-id compile that differs from the assignment. Trying a pipeline before assigning it is a real capability; AC 6 makes the result visible rather than illegal.
 - Making assignment gate dispatch.
 - Resolving the badge-slot precedence (`project-overview`, 1.3).
@@ -70,11 +72,19 @@ Only the decisions an implementer should not have to re-derive. Mechanism is the
 - **INV-ID-3** — "a project is never described as running plain `vN` while local edits exist". This feature ships the **two-field form** (`assigned_pipeline` + `compiled_from`) at the three sites below. Widening them to `vN + local rev <hash>` is `pipeline-revisions`' obligation **on these exact sites**, recorded here so the seam has an owner.
 - **INV-DATA-3** — assignment writes project state only; no pipeline row is created or mutated.
 - **INV-AUTH-1/2** — new routes are human-token surfaces behind `require_human`; runtime tokens are refused loudly and audited. INV-AUTH-1's runtime "fetch pipeline" capability is a worker fetching the pipeline for its own run, not enumerating all pipelines, so the list endpoint stays human-only.
-- **INV-NAME-1** — operator copy for the unassigned state must be one string, not three. Today: `"not assigned"` (card), `"—"` (switcher). Pick one and use it in both.
+- **INV-NAME-1** — *applied by extension, and flagged as such.* The invariant binds the seven design §01 nouns and does not currently reach state copy. But the unassigned state is rendered as `"not assigned"` on the card (`ui/src/registry.tsx:275`) and `"—"` in the switcher (`ui/src/shell.tsx:115`) — two strings for one state. This feature unifies them; whether the invariant should be widened to cover state copy is a promotion candidate below, not something this spec decides unilaterally.
 
 ## Events
 
-- Written: `project.pipeline_assigned`, `project.assign_refused` (unknown pipeline **and** unknown project), and the existing `compile.refused` with a new subject for AC 5's no-target case. Subjects follow the `"{thing} — {reason}"` shape `phase.md`'s unification row prescribes.
+- Written, with subjects pinned — `audit_entry` has no pipeline column (`crates/store/migrations/0002_object_model.sql:200-207`), so the subject is the only slot that can name what was acted on:
+
+| Action | Subject |
+|---|---|
+| `project.pipeline_assigned` | `"{pipeline_id} v{version}"` — the success row must name the pipeline, or the trail cannot answer "assigned to what" |
+| `project.assign_refused` | `"{pipeline_id} — unknown pipeline"` / `"{project_id} — unknown project"` |
+| `compile.refused` (new case) | `"{project_id} — no pipeline given and none assigned"` |
+
+The `"{thing} — {reason}"` shape is a *refusal* convention; the success row uses the naming half of it without a reason clause.
 - Consumed: none. No SSE in phase 1.
 
 ## Environment variables
@@ -99,7 +109,7 @@ Only the decisions an implementer should not have to re-derive. Mechanism is the
 | `…​.content_hash` | `String` | `string` | opaque, equality only; a real computed hash since ESC-1 |
 | `CompileBody.pipeline_id` | `Option<String>` | optional | backward-compatible: both shipped callers always send it |
 
-`PipelineAssignmentStatus` is **unchanged** — no new variant, so no UI fall-through and no ESC-3 test flips.
+`PipelineAssignmentStatus` gains **`Stale`** (`"stale"`), giving `NotCompiled` (no materialization rows) · `Stale` (rows exist, none fresh) · `Published` (a fresh row exists) — the exact split predicate `crates/domain/src/project.rs:46-48` records. The badge slot at `ui/src/registry.tsx:259-266` is a binary ternary and must handle the third value; an unhandled variant takes the else branch and renders the bind badge, not a blank slot.
 
 ## Depends on
 
@@ -121,7 +131,9 @@ A sketch, not a plan. The taskgraph decomposes it.
 4. Read paths return `assigned_pipeline` and `compiled_from`.
 5. Assign and list routes; compile's optional target and resolution order.
 6. `surge assign` subcommand, matching the existing CLI shape.
-7. UI: drop the fixture fallback in the compile dialog; render the mismatch on the pipeline line; unify the unassigned string.
+7. UI: drop the fixture fallback in the compile dialog; render the mismatch on the pipeline line; unify the unassigned string; handle the new `Stale` badge value.
+
+**Compile dialog empty state:** dropping `FIXTURE_PIPELINE_ID` leaves an unassigned project's dialog opening empty with its submit disabled, and this feature ships no picker (1.3). That is the intended state — an unassigned project has nothing to compile — but it must *say* so rather than presenting a dead form. The dialog should name the missing assignment and point at `surge assign`.
 
 ## Grounded claims
 
@@ -173,13 +185,22 @@ Reachable via `surge assign`, `surge compile` (target now optional), `GET /api/p
 - `surge assign` a pipeline id that does not exist; refused by name, an audit row records it, previous assignment stands.
 - `GET /api/pipelines` lists both seeded pipelines, and neither `content_hash` is `sha256:fixture-two-node-v1`.
 
-**Walk precondition:** a `surge.db` created before ESC-1 carries the old placeholder `content_hash`; the seed's `exists()` guard skips it. Delete the dev DB before walking. This discharges the `phase.md` known-defects row whose trigger — "a phase-1.1 feature reads the column" — AC 1 and AC 7 now meet; the row is annotated in the same change as this spec.
+**Walk preconditions.** *Pipeline ids* are discoverable only by calling `GET /api/pipelines` directly — this feature ships no client for it (no CLI subcommand, no `api.ts` entry), so the walker uses curl with the session token from `~/.config/surge/token`. That is an accepted walk technique, stated here so it is not discovered mid-walk. *Dispatch hooks* additionally need an eligible issue: create one via the Registry's fixture-issue button or `surge dispatch`. And: a `surge.db` created before ESC-1 carries the old placeholder `content_hash`; the seed's `exists()` guard skips it. Delete the dev DB before walking. This discharges the `phase.md` known-defects row whose trigger — "a phase-1.1 feature reads the column" — AC 1 and AC 7 now meet; the row is annotated in the same change as this spec.
 
 ## Open questions
 
 1. **Where should `pipeline_content_hash` live?** Deferred deliberately: this feature adds no hash writer. `pipeline-revisions` forces it. `phase.md`'s heading currently says "decide before `pipeline-assignment`"; it is re-pointed at `pipeline-revisions` in the same change as this spec.
 2. **Should the second seeded fixture be blessed?** `blessed` has no writer, and `promote-to-fork` asserts a blessed base. Seeding one blessed would give that spec an exercisable base at no cost here. Proposed yes; confirm when `promote-to-fork` is written.
 3. **Does an unassigned project with a non-null `compiled_from` count as a mismatch?** Reachable today and pinned green by `compile_endpoint.rs:139-143`. Proposed: no — with nothing assigned there is nothing to diverge from; the pipeline line simply names what was compiled.
+
+## Promotion candidates
+
+Raised here rather than decided; each binds more than this feature.
+
+1. **INV-OBS-1's enumerated list is already non-exhaustive in the shipped tree** — `project.created`, `project.bound`, `issue.created`, `issue.retried`, `token.runtime_rotated` are all audited privileged acts absent from its parenthetical. The fix is a dated note saying the enumeration is illustrative and the rule is "every privileged act", not appending one verb per spec.
+2. **The audit subject shape.** `audit_entry` has no entity columns beyond `project_id`, so the subject is what identifies the thing acted on. The `"{thing} — {reason}"` convention currently lives as an owner-unassigned defect row; it belongs beside INV-ERR-1 or INV-OBS-1.
+3. **One concept, one operator string.** The rule this spec applies to unassigned copy will recur for `Stale`, `unbound repo` and the AC 6 mismatch. Either widen INV-NAME-1 with a dated amendment or add a new INV-NAME row.
+4. **Derived read-model fields are computed at read time, never stored.** ESC-3 established it for `pipeline_status`; this spec extends it to `compiled_from`; `pipeline-revisions` will meet it again.
 
 ## Out of scope
 
