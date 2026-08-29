@@ -16,6 +16,13 @@ pub struct Pipeline {
     pub id: String,
     pub name: String,
     pub version: i64,
+    /// **Write-ignored** — `surge_store::pipelines::insert_graph` derives this
+    /// from the graph it is inserting and supersedes whatever it is handed, so
+    /// setting it on a value you are about to write does nothing; it returns
+    /// the derived hash, and reading the row back is the other way to learn the
+    /// truth (ESC-4, mirroring the `Materialization::fresh` precedent). It is a
+    /// pure function of nodes and edges (INV-ID-2), so a caller never possesses
+    /// information the callee lacks.
     pub content_hash: String,
     pub blessed: bool,
     /// Fork provenance: the pipeline-version row this was forked from.
