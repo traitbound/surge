@@ -39,9 +39,7 @@ async fn seed_is_idempotent_across_boots() {
 
     // The fixture pipeline graph is data a fresh instance can compile.
     let (n, e) = surge_domain::fixtures::two_node_graph();
-    let p = surge_domain::fixtures::two_node_pipeline(
-        surge_compiler::pipeline_content_hash(&n, &e),
-    );
+    let p = surge_domain::fixtures::two_node_pipeline();
     let (p2, n2, e2) = surge_store::pipelines::load_graph(&pool, &p.id).await.unwrap();
     assert_eq!(p2, p);
     assert_eq!(n2.len(), n.len());
@@ -119,7 +117,7 @@ async fn seeded_pipeline_row_carries_its_own_content_hash() {
             .unwrap();
     assert_eq!(
         row.content_hash,
-        surge_compiler::pipeline_content_hash(&nodes, &edges),
+        surge_domain::pipeline_content_hash(&nodes, &edges),
         "the persisted content_hash must be the hash of the persisted graph"
     );
 }

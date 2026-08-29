@@ -30,7 +30,7 @@ Decided 2026-08-08 — this section records the **decisions**, not what is built
 - `ENGAGEMENT.md` — operational decisions (project type, repo shape, push/branch policy, ceremony tier)
 - `.halfcycle.json` — machine-readable projection of ENGAGEMENT decisions
 - `.claude/context/` — per-area agent context files (append-only)
-- `crates/` — cargo workspace: `domain` (object model, `ts-rs` derives), `store` (SQLite/`sqlx`, embedded migrations), `server` (Axum, bin `surge-server`), `cli` (bin `surge`), `compiler` (materialization compiler + INV-ID-2 hashing; hash-input changes are `role:critical`)
+- `crates/` — cargo workspace: `domain` (object model, `ts-rs` derives, INV-ID-2's `pipeline_content_hash`; hash-input changes are `role:critical`), `store` (SQLite/`sqlx`, embedded migrations), `server` (Axum, bin `surge-server`), `cli` (bin `surge`), `compiler` (materialization compiler + INV-ID-1's `materialization_hash` over emitted bytes)
 - `ui/` — Vite + React app; `ui/src/generated/` is ts-rs output (gitignored, regenerate via domain tests, never hand-edit)
 - `integrations/claude-plugin/` — Claude Code plugin (ADR-8): zero-dep Node MCP server (work-order-fetch/span/heartbeat/status tools — four of INV-AUTH-1's five capabilities; claim-lease is the Phase 2 interactive path), abort-guard + span-emission hooks (also the raw-HTTP fallback glue); registered via compiled `.claude/mcp.json` + settings hooks
 

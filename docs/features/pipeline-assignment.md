@@ -189,7 +189,7 @@ Reachable via `surge assign`, `surge compile` (target now optional), `GET /api/p
 
 ## Open questions
 
-1. **Where should `pipeline_content_hash` live?** Deferred deliberately: this feature adds no hash writer. `pipeline-revisions` forces it. `phase.md`'s heading currently says "decide before `pipeline-assignment`"; it is re-pointed at `pipeline-revisions` in the same change as this spec.
+1. **Where should `pipeline_content_hash` live?** ~~Deferred deliberately~~ — **answered 2026-08-29 by ESC-4**: it lives in `surge-domain` (`surge_domain::pipeline_content_hash`), and `insert_graph` derives the hash rather than accepting one. This feature still adds no hash writer; it reads `content_hash` through a join, and that column is now guaranteed to be the hash of its own graph. See `phase.md` → "Decided 2026-08-29 (ESC-4)".
 2. **Should the second seeded fixture be blessed?** `blessed` has no writer, and `promote-to-fork` asserts a blessed base. Seeding one blessed would give that spec an exercisable base at no cost here. Proposed yes; confirm when `promote-to-fork` is written.
 3. **Does an unassigned project with a non-null `compiled_from` count as a mismatch?** Reachable today and pinned green by `compile_endpoint.rs:139-143`. Proposed: no — with nothing assigned there is nothing to diverge from; the pipeline line simply names what was compiled.
 

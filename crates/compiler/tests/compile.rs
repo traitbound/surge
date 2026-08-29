@@ -1,10 +1,11 @@
-//! The hash discipline (INV-ID-2), trust gate (INV-AUTH-3) and emission
-//! determinism — the tests that make this crate `role:critical`-safe.
+//! The trust gate (INV-AUTH-3), materialization identity (INV-ID-1) and
+//! emission determinism — the tests that make this crate `role:critical`-safe.
+//! INV-ID-2's own tests moved to `crates/domain/tests/hash.rs` with
+//! `pipeline_content_hash` (ESC-4).
 
-use surge_compiler::{compile, pipeline_content_hash, write_to_repo, CompileRefusal, LibraryIndex};
+use surge_compiler::{compile, write_to_repo, CompileRefusal, LibraryIndex};
 use surge_domain::fixtures;
 use surge_domain::library::{LibraryItem, LibraryItemKind, TrustState};
-use surge_domain::pipeline::EdgeTrigger;
 use surge_domain::project::{PipelineAssignmentStatus, Project, TrackerKind};
 
 fn item(kind: LibraryItemKind, name: &str, body: &str, trust: TrustState) -> LibraryItem {
@@ -46,42 +47,9 @@ fn project() -> Project {
 }
 
 #[test]
-fn hash_covers_semantics_and_ignores_presentation() {
-    let (nodes, edges) = fixtures::two_node_graph();
-    let base = pipeline_content_hash(&nodes, &edges);
-
-    // Presentation churn: same hash (INV-ID-2).
-    let mut moved = nodes.clone();
-    moved[0].x = 999.0;
-    moved[1].label = "Renamed".into();
-    moved[0].metric_binding = Some("pass@k".into());
-    assert_eq!(pipeline_content_hash(&moved, &edges), base);
-
-    // Node order never matters.
-    let mut reversed = nodes.clone();
-    reversed.reverse();
-    assert_eq!(pipeline_content_hash(&reversed, &edges), base);
-
-    // Semantic changes: different hash.
-    let mut gated = nodes.clone();
-    gated[1].human_gate = true;
-    assert_ne!(pipeline_content_hash(&gated, &edges), base);
-
-    let mut retriggered = edges.clone();
-    retriggered[0].trigger = EdgeTrigger::Passed;
-    assert_ne!(pipeline_content_hash(&nodes, &retriggered), base);
-
-    let mut repinned = nodes.clone();
-    if let surge_domain::pipeline::NodeConfig::Agent { subagent, .. } = &mut repinned[1].config {
-        subagent.version = 2; // a version bump is semantic (INV-DATA-2)
-    }
-    assert_ne!(pipeline_content_hash(&repinned, &edges), base);
-}
-
-#[test]
 fn fixture_compiles_deterministically() {
     let (nodes, edges) = fixtures::two_node_graph();
-    let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
+    let pipeline = fixtures::two_node_pipeline();
     let lib = fixture_library();
     let a = compile(&pipeline, &nodes, &edges, &lib, &project()).unwrap();
     let b = compile(&pipeline, &nodes, &edges, &lib, &project()).unwrap();
@@ -113,7 +81,7 @@ fn fixture_compiles_deterministically() {
 #[test]
 fn untrusted_import_blocks_compile_with_names() {
     let (nodes, edges) = fixtures::two_node_graph();
-    let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
+    let pipeline = fixtures::two_node_pipeline();
     let mut lib = fixture_library();
     lib.get_mut(&(LibraryItemKind::Skill, "write-summary".into(), 1))
         .unwrap()
@@ -127,7 +95,7 @@ fn untrusted_import_blocks_compile_with_names() {
 #[test]
 fn missing_item_refuses() {
     let (nodes, edges) = fixtures::two_node_graph();
-    let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
+    let pipeline = fixtures::two_node_pipeline();
     let mut lib = fixture_library();
     lib.remove(&(LibraryItemKind::Subagent, "implementer".into(), 1));
     assert!(matches!(
@@ -139,7 +107,7 @@ fn missing_item_refuses() {
 #[test]
 fn write_to_repo_lands_files_and_maintains_gitignore_block() {
     let (nodes, edges) = fixtures::two_node_graph();
-    let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
+    let pipeline = fixtures::two_node_pipeline();
     let compiled = compile(&pipeline, &nodes, &edges, &fixture_library(), &project()).unwrap();
     let repo = tempfile::tempdir().unwrap();
     std::fs::write(repo.path().join(".gitignore"), "target/\n").unwrap();
@@ -171,45 +139,4 @@ fn write_to_repo_lands_files_and_maintains_gitignore_block() {
         "entries after the block survive a recompile: {gi}"
     );
     assert_eq!(gi.matches("# >>> surge-managed").count(), 1, "still one block");
-}
-
-/// INV-ID-2, the case the original test never built: a Block node's collapse
-/// state is canvas state and must not change the pipeline's identity. Hashing
-/// `NodeConfig` wholesale meant it did (review 2026-08-26).
-#[test]
-fn block_collapse_state_never_enters_the_hash() {
-    use surge_domain::pipeline::{Node, NodeConfig};
-    let (mut nodes, edges) = fixtures::two_node_graph();
-    let block = |collapsed: bool| Node {
-        id: "nd_block".into(),
-        pipeline_id: "pl_two_node_v1".into(),
-        label: "Group".into(),
-        x: 0.0,
-        y: 0.0,
-        human_gate: false,
-        emits_span: false,
-        metric_binding: None,
-        metric_note: None,
-        config: NodeConfig::Block {
-            members: vec!["nd_write_summary".into(), "nd_implement".into()],
-            exposed_params: vec!["model".into()],
-            collapsed,
-        },
-    };
-
-    nodes.push(block(false));
-    let open = pipeline_content_hash(&nodes, &edges);
-    nodes.pop();
-    nodes.push(block(true));
-    let shut = pipeline_content_hash(&nodes, &edges);
-    assert_eq!(open, shut, "collapse state is presentation (INV-ID-2)");
-
-    // But the block's semantic content still counts.
-    nodes.pop();
-    let mut different = block(true);
-    if let NodeConfig::Block { members, .. } = &mut different.config {
-        members.pop();
-    }
-    nodes.push(different);
-    assert_ne!(pipeline_content_hash(&nodes, &edges), open, "membership is semantic");
 }

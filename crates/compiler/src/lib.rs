@@ -3,8 +3,11 @@
 //! result and write it into the bound repo via [`write_to_repo`].
 //!
 //! Hash discipline is this crate's reason to exist as a crate (`role:critical`):
-//! [`pipeline_content_hash`] covers semantic content only (INV-ID-2), and a
-//! materialization's identity is a content hash every run records (INV-ID-1).
+//! a materialization's identity is a content hash every run records (INV-ID-1),
+//! computed here by [`materialization_hash`] over the pipeline's semantic hash
+//! × the project × the emitted bytes. The semantic half — `pipeline_content_hash`,
+//! INV-ID-2 — lives in `surge-domain` beside the types it hashes (ESC-4), and
+//! this crate consumes it like any other caller.
 
 mod capability;
 mod emit;
@@ -14,13 +17,14 @@ mod write;
 
 pub use capability::capability_report;
 pub use emit::surge_yaml_base;
-pub use hash::{materialization_hash, pipeline_content_hash};
+pub use hash::materialization_hash;
 pub use write::write_to_repo;
 
 use std::collections::BTreeMap;
 use surge_domain::library::{LibraryItem, LibraryItemKind, TrustState};
 use surge_domain::materialization::CapabilityReport;
 use surge_domain::pipeline::{Edge, LibraryRef, Node, NodeConfig, Pipeline};
+use surge_domain::pipeline_content_hash;
 use surge_domain::project::Project;
 
 /// One compiled file, relative to the bound repo root.

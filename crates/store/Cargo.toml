@@ -16,9 +16,3 @@ rand = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-# Test-only. The store's fixture rows must carry the identity INV-ID-2 defines
-# (ESC-1), and `pipeline_content_hash` lives in the compiler. Dev-only on
-# purpose: `insert_graph` still takes the hash it is given, so the shipped
-# dependency graph is unchanged and stays acyclic (the compiler never sees the
-# store).
-surge-compiler = { path = "../compiler" }

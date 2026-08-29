@@ -88,9 +88,7 @@ async fn setup(worker_script: &str) -> Env {
     };
     surge_store::projects::insert(&pool, &project).await.unwrap();
     let (n, e) = surge_domain::fixtures::two_node_graph();
-    let p = surge_domain::fixtures::two_node_pipeline(
-        surge_compiler::pipeline_content_hash(&n, &e),
-    );
+    let p = surge_domain::fixtures::two_node_pipeline();
     surge_store::pipelines::insert_graph(&pool, &p, &n, &e).await.unwrap();
     for (kind, name) in [
         (surge_domain::library::LibraryItemKind::Subagent, "doc-writer"),
@@ -112,9 +110,7 @@ async fn setup(worker_script: &str) -> Env {
 
 async fn compile(env: &Env) {
     let (n, e) = surge_domain::fixtures::two_node_graph();
-    let p = surge_domain::fixtures::two_node_pipeline(
-        surge_compiler::pipeline_content_hash(&n, &e),
-    );
+    let p = surge_domain::fixtures::two_node_pipeline();
     let mut lib = surge_compiler::LibraryIndex::new();
     for (kind, r) in surge_compiler::referenced_items(&n) {
         let item = surge_store::library::get(&env.state.pool, kind, &r.name, r.version)
