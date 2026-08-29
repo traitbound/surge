@@ -554,6 +554,49 @@ mod object_model_tests {
         );
     }
 
+    /// ESC-5 / ESC-3 follow-up: `insert_fresh` names its own effect — the row
+    /// it inserts is a *fresh* materialization by construction. A caller that
+    /// hands it `fresh: false` must not be able to stale every predecessor
+    /// and then leave the project with zero fresh rows: that is exactly the
+    /// `EXISTS(any) AND NOT EXISTS(fresh)` state `PipelineAssignmentStatus`
+    /// was built on the premise could never happen (ESC-3). Regardless of
+    /// what the caller's struct claims, the row `insert_fresh` writes reads
+    /// back fresh.
+    #[tokio::test]
+    async fn insert_fresh_always_writes_a_fresh_row_regardless_of_caller_claim() {
+        let pool = crate::open_in_memory().await.unwrap();
+        seed_project_and_pipeline(&pool).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        crate::materializations::insert_fresh(
+            &mut tx,
+            &surge_domain::materialization::Materialization {
+                id: "mk_esc5".into(),
+                content_hash: "sha256:esc5".into(),
+                cache_key: "mk_esc5..fixture".into(),
+                pipeline_id: "pl_two_node_v1".into(),
+                project_id: "prj_fixture".into(),
+                signed_by: "st_test".into(),
+                fresh: false, // a caller mistake — insert_fresh's own name overrides it
+                created_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let row = crate::materializations::fresh_for_project(&pool, "prj_fixture")
+            .await
+            .unwrap();
+        assert!(
+            row.is_some(),
+            "insert_fresh must leave the project with a fresh materialization even when the \
+             caller's struct claimed fresh: false — the function's name is the contract, not \
+             the field"
+        );
+        assert!(row.unwrap().fresh, "the row insert_fresh writes must read back fresh");
+    }
+
     #[tokio::test]
     async fn audit_appends_and_reads_back() {
         let pool = crate::open_in_memory().await.unwrap();
