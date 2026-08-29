@@ -87,8 +87,8 @@ graph TB
 
 Latent in phase 0 because pipelines are seeded, never authored. The canvas is what exposes it.
 
-| **A pre-existing `surge.db` keeps the old placeholder `content_hash`.** ESC-1 (`3ecd585`) makes the seed derive the hash before insert, but its `exists()` guard skips databases that already hold the row, and correcting it in place would need an update on a published pipeline version (INV-DATA-3). **Remedy: delete the local dev DB.** Inert today — nothing in production reads the column; `crates/server/src/compile_api.rs:43` loads the graph and `crates/compiler/src/lib.rs:119` recomputes the hash from it. It stops being inert the moment a phase-1.1 feature reads the column | ESC-1 review, 2026-08-28 | `pipeline-assignment` |
-| **`insert_graph` accepts whatever hash it is handed**, so the ESC-1 fix is one caller away from regressing. Today the seed is the only production caller (verified by grep across `crates/`, `ui/`, `integrations/`) | ESC-1 review, 2026-08-28 | `pipeline-assignment` |
+| **A pre-existing `surge.db` keeps the old placeholder `content_hash`.** ESC-1 (`3ecd585`) makes the seed derive the hash before insert, but its `exists()` guard skips databases that already hold the row, and correcting it in place would need an update on a published pipeline version (INV-DATA-3). **Remedy: delete the local dev DB.** Inert today — nothing in production reads the column; `crates/server/src/compile_api.rs:43` loads the graph and `crates/compiler/src/lib.rs:119` recomputes the hash from it. It stops being inert the moment a phase-1.1 feature reads the column | ESC-1 review, 2026-08-28 | **discharged** by `pipeline-assignment` as a stated walk precondition ("delete the dev DB before walking") — the trigger condition is now met, since its AC 1 and AC 7 read the column |
+| **`insert_graph` accepts whatever hash it is handed**, so the ESC-1 fix is one caller away from regressing. Today the seed is the only production caller (verified by grep across `crates/`, `ui/`, `integrations/`) | ESC-1 review, 2026-08-28 | **re-homed 2026-08-29 to `pipeline-revisions`** — `pipeline-assignment` adds no `insert_graph` caller, so it cannot discharge this by writing code; `pipeline-revisions` adds the second caller |
 
 | **The two claim-lease refusals disagree about their audit subject.** `claim_lease`'s pre-existing `Ok(false)` branch records `subject = issue_id`; every other refusal records `subject = reason` (3 of 4). More sharply: `audit_entry` has **no `issue_id` and no `run_id` column** (`crates/store/migrations/0002_object_model.sql:200-207`), so `subject` is the only slot that can name the thing acted on — the new refusal row cannot identify *which issue* was refused from the audit trail alone, only by project + timestamp. Unify to `"{issue_id} — {reason}"`, the shape `runtime_api::refuse` already uses | ESC-2 review, 2026-08-28 | unassigned |
 | **`refusal_run` seeds its run id on `{issue_id}{now}` at millisecond resolution.** Two claims for one issue in the same millisecond collide on the primary key, and the refusal answers 500 with nothing recorded — an INV-ERR-1 hole inside the fix for INV-ERR-1 holes. Pre-existing formula, but the claim path is the first place it is reachable by a retry loop against a pollable endpoint | ESC-2 review, 2026-08-28 | unassigned |
@@ -99,13 +99,23 @@ Latent in phase 0 because pipelines are seeded, never authored. The canvas is wh
 | **`materialization.project_id` is not indexed.** SQLite creates no index for a foreign-key child column; the only index in the schema is `span_by_run`. The derived-status subquery is therefore a correlated full scan of `materialization` per project row. Irrelevant at single-user local scale, but the reason is worth stating correctly — add `CREATE INDEX materialization_by_project ON materialization(project_id)` whenever the next migration touches that table | ESC-3 review, 2026-08-28 | next migration author |
 | **`POST /api/projects` commits the project insert and its audit row as two separate pool calls**, unlike the transactional pattern the bind path uses — an INV-DATA-8 gap on the create path. Pre-existing, unrelated to ESC-3 | ESC-3 review, 2026-08-28 | unassigned |
 
-### Decide before `pipeline-assignment`: where `pipeline_content_hash` lives
+### Decide before `pipeline-revisions`: where `pipeline_content_hash` lives
+
+*(Re-pointed 2026-08-29: `pipeline-assignment` reads `content_hash` through a join and adds no hash writer, so it does not force the decision. `pipeline-revisions` adds the second writer.)*
 
 The ESC-1 reviewer proposed a third option that neither the implementer nor I had considered, and it is better than both: **move `pipeline_content_hash` from `surge-compiler` into `surge-domain`.** `crates/compiler/src/hash.rs` imports nothing but `surge_domain::pipeline` types plus `serde`/`sha2`/`hex`, so relocating it adds **no crate edge in either direction** — and it dissolves the residual gap entirely: the fixture could compute its own identity, and `insert_graph` could derive the hash rather than accept one.
 
 The alternative that looks obvious — having `insert_graph` call the compiler — is the *wrong* structural fix: it puts `surge-store → surge-compiler` in the shipped graph, and the honest home for hash derivation is the publish path, not a repository function.
 
 Relocation is `role:critical` (code map, compiler row: hash-input changes are serialized), so it is not a drive-by. Decide it before `pipeline-assignment` adds the second writer.
+
+## Sprint working note — spec depth (2026-08-29)
+
+Five review rounds in this epic averaged ~12 blockers each. A large share were the spec **prescribing implementation mechanism** in prose and being wrong about it: a store-function signature that would not compile (`sqlx::Executor` consumes `self`, so a generic executor drives exactly one statement), a `LEFT JOIN` that could duplicate rows where the `EXISTS` it replaced could not, and a migration recipe that would have cascaded away every graph in the database.
+
+**Decision: specs in this epic state contracts, not mechanism.** Acceptance criteria, wire shapes, invariants touched, seams, non-goals and grounded claims — yes. Store signatures, SQL shapes, module layout, migration recipes — no; those are settled against the compiler and the schema by the implementer, under the fresh-reviewer gate that already catches them. The template asked for "implementation sketch (short — the taskgraph decomposes it)" all along.
+
+The reviews were not the problem: every grounded claim's *inference* held in the last round. The over-reach was.
 
 ## Scoping assumptions
 
