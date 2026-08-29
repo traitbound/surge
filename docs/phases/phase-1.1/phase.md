@@ -113,6 +113,14 @@ The ESC-1 reviewer's third option was taken: `pipeline_content_hash` and its `Se
 **Done as ESC-4** (2026-08-29): `pipeline_content_hash` now lives in `surge-domain`, and `insert_graph` derives the hash rather than accepting one. Relocation was `role:critical` (code map: hash-input changes are serialized) and a reviewer verified from two independently built trees that no hash moved by a byte.
 The alternative that looks obvious — having `insert_graph` call the compiler — was rejected as before: it would put `surge-store → surge-compiler` in the shipped graph.
 
+### Carried from the ESC-4 review (2026-08-29)
+
+**One shape, three instances, and the durable fix nobody has built.** `Project::pipeline_status` (ESC-3), `Materialization::fresh` (ESC-5) and `Pipeline::content_hash` (ESC-4) are now all *write-ignored* fields: the repository function owns the column, and the struct field is a read projection reused on the write path. The unifying rule the ESC-4 reviewer named is worth promoting to an invariant: **a repository write function owns any column its own name asserts, or that is a pure function of its other arguments.** The shared root cause is one struct serving both read and write; the durable fix is a write-side type per entity. Three doc comments are a convention; a type would be a guarantee.
+
+**`serde_json` is now the canonical encoder inside the identity crate.** `pipeline_content_hash` serializes its semantic projection with `serde_json`, and that function now lives in `surge-domain`. A `serde_json` or `sha2` upgrade that changed map ordering or float encoding would silently re-key **every pipeline in existence**. The risk is pre-existing — it was equally true in `surge-compiler` — but it now sits in the crate that defines identity. The golden constant in `crates/domain/tests/hash.rs` is the **only** thing in the tree that would catch it; no relational assertion can. Treat a bump of either crate as `role:critical`.
+
+**`insert_graph`'s `Result<String>` is vestigial today.** All six call sites discard the returned hash via `?` or `.unwrap()`; `#[must_use]` applies to the `Result`, not the payload, so nothing forces a caller to reconcile its in-memory `Pipeline` with the row. The shipped behaviour is right and the field now documents itself, but the doc comment claims more for the return value than the tree currently buys. Either a caller uses it or the claim should be softened.
+
 ## Sprint working note — spec depth (2026-08-29)
 
 Five review rounds in this epic averaged ~12 blockers each. A large share were the spec **prescribing implementation mechanism** in prose and being wrong about it: a store-function signature that would not compile (`sqlx::Executor` consumes `self`, so a generic executor drives exactly one statement), a `LEFT JOIN` that could duplicate rows where the `EXISTS` it replaced could not, and a migration recipe that would have cascaded away every graph in the database.
