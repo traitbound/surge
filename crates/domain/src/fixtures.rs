@@ -11,24 +11,24 @@ pub const FIXTURE_CREATED_AT: crate::Millis = 1_756_000_000_000;
 /// node and edge ids, not the pipeline's.
 pub const TWO_NODE_PIPELINE_ID: &str = "pl_two_node_v1";
 
-/// The pipeline row for `two-node v1`, given the identity of its graph.
+/// The pipeline row for `two-node v1`, carrying the identity of its own graph.
 ///
-/// `content_hash` is a parameter and not a constant on purpose. A pipeline's
-/// identity is *derived* from its graph by `pipeline_content_hash` (INV-ID-2),
-/// which lives in `surge-compiler`; `surge-compiler` depends on this crate, so
-/// this crate cannot call it. A fixture that carried its own hash could
-/// therefore only carry a literal — and the literal it carried through phase 0
-/// (`sha256:fixture-two-node-v1`) was never the hash of anything, which made
-/// the seeded row's identity meaningless. So the fixture no longer claims an
-/// identity it cannot compute: every caller sees both crates and passes
-/// `surge_compiler::pipeline_content_hash(&nodes, &edges)` over the graph from
-/// [`two_node_graph`].
-pub fn two_node_pipeline(content_hash: impl Into<String>) -> Pipeline {
+/// The `content_hash` is **derived here** from [`two_node_graph`] by
+/// [`crate::pipeline_content_hash`] — it is not a literal and not a parameter.
+/// Through phase 0 it was a literal (`sha256:fixture-two-node-v1`) that was
+/// never the hash of anything, which made the seeded row's identity
+/// meaningless (ESC-1). ESC-1 pushed the derivation out to every caller,
+/// because `pipeline_content_hash` then lived in `surge-compiler`, downstream
+/// of this crate. ESC-4 moved that function into `surge-domain`, so the
+/// fixture can finally state its own identity and no caller can state a
+/// different one.
+pub fn two_node_pipeline() -> Pipeline {
+    let (nodes, edges) = two_node_graph();
     Pipeline {
         id: TWO_NODE_PIPELINE_ID.into(),
         name: "two-node".into(),
         version: 1,
-        content_hash: content_hash.into(),
+        content_hash: crate::pipeline_content_hash(&nodes, &edges),
         blessed: false,
         forked_from: None,
         created_at: FIXTURE_CREATED_AT,

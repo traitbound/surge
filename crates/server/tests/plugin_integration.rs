@@ -52,9 +52,11 @@ async fn live() -> Live {
             id: "pl_p".into(),
             name: "p".into(),
             version: 1,
-            // Empty graph, but a real identity: no pipeline row anywhere
-            // carries a hash that is not its graph's (INV-ID-2, ESC-1).
-            content_hash: surge_compiler::pipeline_content_hash(&[], &[]),
+            // `insert_graph` derives and stores the hash of the graph below,
+            // so this field is superseded (ESC-4). Left explicit and wrong-
+            // looking on purpose: it is the store, not the caller, that makes
+            // sure no pipeline row carries a hash that is not its graph's.
+            content_hash: String::new(),
             blessed: false,
             forked_from: None,
             created_at: 1,

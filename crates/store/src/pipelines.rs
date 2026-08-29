@@ -5,15 +5,32 @@
 use anyhow::Context;
 use sqlx::SqlitePool;
 use surge_domain::pipeline::{Edge, EdgeTrigger, Node, NodeConfig, Pipeline};
+use surge_domain::pipeline_content_hash;
 
 /// Insert a published pipeline version with its whole graph in one
 /// transaction (INV-DATA-8: no half-landed graphs).
+///
+/// The row's `content_hash` is **derived from `nodes`/`edges` here**, and the
+/// `content_hash` carried by `pipeline` is superseded — the derived value is
+/// what lands and what this function returns. That is not the store having an
+/// opinion: INV-ID-2 defines the hash as a pure function of the graph, so a
+/// caller-supplied value is a second source of truth for something the store
+/// already holds the only inputs to. Accepting it is how a wrong identity got
+/// seeded through the whole of phase 0 (ESC-1), and accepting it *with a
+/// mismatch check* would only make a caller's arithmetic error fatal instead
+/// of making it unrepresentable. Returning the derived hash is the non-silent
+/// half: a caller holding a `Pipeline` value can correct its in-memory copy
+/// rather than diverge from the row it just wrote.
+///
+/// A published version is immutable (INV-DATA-3), so this is the only moment
+/// the hash can be set; there is no update path that could fix it later.
 pub async fn insert_graph(
     pool: &SqlitePool,
     pipeline: &Pipeline,
     nodes: &[Node],
     edges: &[Edge],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
+    let content_hash = pipeline_content_hash(nodes, edges);
     let mut tx = pool.begin().await?;
     let blessed = pipeline.blessed as i64;
     sqlx::query!(
@@ -22,7 +39,7 @@ pub async fn insert_graph(
         pipeline.id,
         pipeline.name,
         pipeline.version,
-        pipeline.content_hash,
+        content_hash,
         blessed,
         pipeline.forked_from,
         pipeline.created_at
@@ -70,7 +87,7 @@ pub async fn insert_graph(
         .await?;
     }
     tx.commit().await?;
-    Ok(())
+    Ok(content_hash)
 }
 
 pub async fn exists(pool: &SqlitePool, id: &str) -> anyhow::Result<bool> {

@@ -8,3 +8,9 @@ publish.workspace = true
 [dependencies]
 serde = { workspace = true }
 ts-rs = { workspace = true }
+# `pipeline_content_hash` (INV-ID-2) lives here, beside the types it hashes
+# (ESC-4). These three are the whole of its machinery; none is a first-party
+# crate, so `surge-domain` still depends on no other workspace crate.
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }

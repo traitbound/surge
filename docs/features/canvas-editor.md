@@ -93,12 +93,12 @@ The UI is served embedded from the binary (`rust-embed`, ADR-4) and talks to a s
 
 | Field | Rust type | JSON / TS | Who transforms | Notes |
 |---|---|---|---|---|
-| `Node.x`, `Node.y` | `f64` | `number` | none | presentation only; never hashed (`hash.rs:60-65` omits them) |
+| `Node.x`, `Node.y` | `f64` | `number` | none | presentation only; never hashed (`crates/domain/src/hash.rs:79-83` omits them) |
 | `Node.label` | `String` | `string` | none | **presentation** — `SemanticNode` omits it, so editing a label must not change the hash (AC 4) |
 | `Node.human_gate` | `bool` | `boolean` | none | **hashed** |
 | `Node.config` | `NodeConfig` | discriminated union on `kind` | none | **hashed** (via the `SemanticConfig` allowlist) |
 | `NodeConfig::Agent.fanout` | `Option<u32>` | `number \| null` | none | **hashed**; absent and `0` are different graphs — the inspector must not coerce empty to `0` |
-| `NodeConfig::Block.collapsed` | `bool` | `boolean` | none | **presentation** — explicitly excluded from the hash (`hash.rs:38`) |
+| `NodeConfig::Block.collapsed` | `bool` | `boolean` | none | **presentation** — explicitly excluded from the hash (`crates/domain/src/hash.rs:56-57`) |
 | `LibraryRef.version` | `i64` | **`bigint`** | ts-rs | ts-rs maps `i64` → `bigint`, not `number` (confirmed in `ui/src/generated/AssignedPipeline.ts`). Any arithmetic or `JSON.stringify` on a version must handle BigInt; naive `JSON.stringify` throws on it |
 | `Pipeline.version`, `Millis` fields | `i64` | **`bigint`** | ts-rs | same hazard; the existing UI already coerces with `Number(...)` at render sites (`ui/src/observatory.tsx:57`) |
 
@@ -128,9 +128,9 @@ The UI is served embedded from the binary (`rust-embed`, ADR-4) and talks to a s
 |---|---|---|
 | Six node kinds exist, tagged by `kind`, snake_case | `crates/domain/src/pipeline.rs:44-83` | read the enum and its `kind()` impl; variants are Doc, Agent, Hook, Skill, Stage, Block |
 | `Block` is a *node kind*, not a UI grouping | `crates/domain/src/pipeline.rs:76-81` | `NodeConfig::Block { members, exposed_params, collapsed }` is a variant like any other — so it must render in 1.1 even though its authoring UX is 1.3 |
-| `members`/`exposed_params` are hashed; `collapsed` is not | `crates/compiler/src/hash.rs:38` | `SemanticConfig::Block { members, exposed_params }` with an explicit comment excluding `collapsed` |
-| `label`, `x`, `y` are **not** hashed | `crates/compiler/src/hash.rs:60-65` | `SemanticNode` carries only `id`, `human_gate`, `config` — no label, no coordinates |
-| The hash projection is exhaustive-by-compiler, so a new field forces a decision | `crates/compiler/src/hash.rs:20-24` | every variant destructures with no `..` rest pattern; adding a field to `NodeConfig` fails to compile here |
+| `members`/`exposed_params` are hashed; `collapsed` is not | `crates/domain/src/hash.rs:56-57` | `SemanticConfig::Block { members, exposed_params }` with an explicit comment excluding `collapsed` |
+| `label`, `x`, `y` are **not** hashed | `crates/domain/src/hash.rs:78-83` | `SemanticNode` carries only `id`, `human_gate`, `config` — no label, no coordinates |
+| The hash projection is exhaustive-by-compiler, so a new field forces a decision | `crates/domain/src/hash.rs:39-42` | every variant destructures with no `..` rest pattern; adding a field to `NodeConfig` fails to compile here |
 | **No pipeline HTTP route exists today** | `crates/server/src/human_api.rs:18-33` | read every `.route(...)` on the human router: projects, bind, runtime-token, compile, session/rotate, audit, issues, dispatch, retry, runs, abort, spans, doc-run. No `/pipelines` |
 | The store can already read a graph; nothing new needed for the read path | `crates/store/src/pipelines.rs:84` | `load_graph` exists alongside `insert_graph` and `reachable_nodes` |
 | The store **never updates** a published pipeline | `crates/store/src/pipelines.rs:1-3` | module header: "it inserts whole graphs and reads them; it never updates one" (INV-DATA-3) — so the canvas cannot edit a published row in place |
@@ -165,7 +165,7 @@ Each references a surface this feature actually builds:
 
 - Dry run, diff overlay, run overlay, debugger (1.3, Phase 2, Phase 3).
 - The EVAL tab and context-budget bars (1.3).
-- Any change to `pipeline_content_hash` itself. Hash-input changes are `role:critical` (code map, compiler row) and are not in this feature's remit.
+- Any change to `pipeline_content_hash` itself. Hash-input changes are `role:critical` (code map, domain row — the function moved out of `compiler` in ESC-4) and are not in this feature's remit.
 - Keyboard-shortcut surface beyond undo/redo.
 - Collaborative or multi-tab editing; phase 1 is single-operator with no SSE.
 

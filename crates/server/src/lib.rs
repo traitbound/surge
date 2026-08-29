@@ -146,17 +146,15 @@ pub async fn bootstrap_seed(pool: &SqlitePool) -> anyhow::Result<()> {
     // Phase 0 has no editor; pipelines are data. Seed the two-node pipeline
     // so a fresh instance has something to compile and dispatch.
     //
-    // The row's identity is derived here, from the graph, and derived *before*
-    // the insert: `content_hash` is what INV-ID-2 says it is for every pipeline
-    // row, and INV-DATA-3 keeps a published version immutable, so there is no
-    // update to correct it afterwards. This seed is the only production writer
-    // of a pipeline row today; anything else that grows one owes the same two
-    // lines. (The fixture cannot do this for itself — `pipeline_content_hash`
-    // lives in `surge-compiler`, which depends on `surge-domain`.)
+    // The row's identity is not this seed's business any more: the fixture
+    // derives its own `content_hash` from its own graph, and `insert_graph`
+    // derives the value it stores from the graph it is handed (ESC-4). Every
+    // future writer of a pipeline row inherits that for free — where ESC-1
+    // left the obligation with each caller, it is now structural. INV-DATA-3
+    // keeps a published version immutable, so the insert is the only moment
+    // the hash can be set.
     let (nodes, edges) = surge_domain::fixtures::two_node_graph();
-    let pipeline = surge_domain::fixtures::two_node_pipeline(
-        surge_compiler::pipeline_content_hash(&nodes, &edges),
-    );
+    let pipeline = surge_domain::fixtures::two_node_pipeline();
     if !surge_store::pipelines::exists(pool, &pipeline.id).await? {
         surge_store::pipelines::insert_graph(pool, &pipeline, &nodes, &edges).await?;
         seeded.push(format!("{} ({})", pipeline.name, pipeline.id));

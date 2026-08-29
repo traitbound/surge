@@ -14,11 +14,16 @@ pub mod audit;
 pub mod board;
 pub mod doc;
 pub mod fixtures;
+mod hash;
 pub mod library;
 pub mod materialization;
 pub mod observatory;
 pub mod pipeline;
 pub mod project;
+
+/// INV-ID-2's executable form — a pipeline's identity is a pure function of
+/// its graph, so it derives here rather than in a downstream crate (ESC-4).
+pub use hash::pipeline_content_hash;
 
 use serde::Serialize;
 use ts_rs::TS;

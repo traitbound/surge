@@ -100,16 +100,15 @@ mod tests {
 #[cfg(test)]
 mod object_model_tests {
     use super::tests_support::*;
-    use surge_compiler::pipeline_content_hash;
     use surge_domain::board::WorkOrder;
-    use surge_domain::fixtures;
+    use surge_domain::{fixtures, pipeline_content_hash};
     use surge_domain::observatory::{Run, RunKind, RunStatus, Span, SpanRole, SpanStatus};
 
     #[tokio::test]
     async fn pipeline_graph_roundtrips_and_traverses() {
         let pool = crate::open_in_memory().await.unwrap();
         let (nodes, edges) = fixtures::two_node_graph();
-        let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
+        let pipeline = fixtures::two_node_pipeline();
         crate::pipelines::insert_graph(&pool, &pipeline, &nodes, &edges).await.unwrap();
 
         let (p2, mut n2, e2) = crate::pipelines::load_graph(&pool, &pipeline.id).await.unwrap();
@@ -129,14 +128,38 @@ mod object_model_tests {
         assert_eq!(reach, vec!["nd_implement".to_string(), "nd_write_summary".to_string()]);
     }
 
+    /// ESC-4 / INV-ID-2. `content_hash` is a pure function of the graph, so
+    /// the store derives it instead of believing the caller. A caller that
+    /// hands in a wrong hash cannot land a wrong identity in the database.
+    #[tokio::test]
+    async fn insert_graph_derives_content_hash_and_supersedes_the_one_it_is_handed() {
+        let pool = crate::open_in_memory().await.unwrap();
+        let (nodes, edges) = fixtures::two_node_graph();
+        let truth = pipeline_content_hash(&nodes, &edges);
+
+        let mut lying = fixtures::two_node_pipeline();
+        lying.content_hash = "sha256:not-the-hash-of-anything".into();
+        let returned = crate::pipelines::insert_graph(&pool, &lying, &nodes, &edges).await.unwrap();
+        assert_eq!(returned, truth, "the derived hash is handed back, not swallowed");
+
+        let (row, n2, e2) = crate::pipelines::load_graph(&pool, &lying.id).await.unwrap();
+        assert_eq!(row.content_hash, truth, "the store derives identity from the graph it inserts");
+        assert_eq!(
+            row.content_hash,
+            pipeline_content_hash(&n2, &e2),
+            "and the persisted row hashes to its own persisted graph"
+        );
+    }
+
     #[tokio::test]
     async fn dangling_edge_is_refused_by_the_engine() {
         let pool = crate::open_in_memory().await.unwrap();
         let (nodes, mut edges) = fixtures::two_node_graph();
         edges[0].to_node = "nd_missing".into();
-        // Hashed after the mutation: the row the engine is asked to reject is
-        // internally consistent, so the FK is the only reason it can fail.
-        let pipeline = fixtures::two_node_pipeline(pipeline_content_hash(&nodes, &edges));
+        // `insert_graph` hashes the mutated graph itself, so the row the engine
+        // is asked to reject is internally consistent and the FK is the only
+        // reason it can fail.
+        let pipeline = fixtures::two_node_pipeline();
         let err = crate::pipelines::insert_graph(&pool, &pipeline, &nodes, &edges).await;
         assert!(err.is_err(), "FK on (pipeline_id, to_node) must reject a dangling edge");
         // And the transaction rolled back whole (INV-DATA-8): no orphan pipeline row.
@@ -614,7 +637,6 @@ mod object_model_tests {
 #[cfg(test)]
 mod tests_support {
     use sqlx::SqlitePool;
-    use surge_compiler::pipeline_content_hash;
     use surge_domain::fixtures;
 
     /// Seed the FK targets run/span rows need: one project, the fixture pipeline.
@@ -627,7 +649,7 @@ mod tests_support {
         .await
         .unwrap();
         let (n, e) = fixtures::two_node_graph();
-        let p = fixtures::two_node_pipeline(pipeline_content_hash(&n, &e));
+        let p = fixtures::two_node_pipeline();
         crate::pipelines::insert_graph(pool, &p, &n, &e).await.unwrap();
     }
 
