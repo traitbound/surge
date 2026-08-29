@@ -17,6 +17,12 @@ pub struct Materialization {
     pub project_id: String,
     /// Signed by the instance's human session identity (§04 capability report).
     pub signed_by: String,
+    /// **Write-ignored** — `insert_fresh` hardcodes a fresh row, so setting
+    /// this on a value you are about to write does nothing; read it back to
+    /// learn the truth (ESC-5, mirroring the `Project::pipeline_status`
+    /// precedent). A write that must leave a project with no fresh
+    /// materialization — the `Stale` state `pipeline-revisions` needs — needs
+    /// its own function, not a `false` passed to this one.
     pub fresh: bool,
     pub created_at: Millis,
 }
