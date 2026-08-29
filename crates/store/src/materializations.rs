@@ -27,11 +27,22 @@ pub async fn insert_fresh(
     sqlx::query!("UPDATE materialization SET fresh = 0 WHERE project_id = ? AND fresh = 1", m.project_id)
         .execute(&mut *conn)
         .await?;
-    let fresh = m.fresh as i64;
+    // Deliberately NOT `m.fresh` (ESC-5 / ESC-3 follow-up). This function's
+    // name is the contract: it inserts a fresh materialization, staling the
+    // predecessors above in the same statement's atomicity. Reading a
+    // caller-supplied `fresh` here would let a caller passing `fresh: false`
+    // stale every predecessor and then insert a non-fresh successor,
+    // producing a project with materialization rows where none is fresh —
+    // exactly the state `PipelineAssignmentStatus::NotCompiled`'s derivation
+    // (ESC-3) is built on being unreachable. Hardcoding the literal makes
+    // that state unwritable through this function rather than merely
+    // rejected by a runtime check. `Materialization::fresh` stays meaningful
+    // on the way out (`fresh_for_project` reads the real column); it is only
+    // ignored on the way in, here.
     sqlx::query!(
         "INSERT INTO materialization (id, content_hash, cache_key, pipeline_id, project_id,
                                       signed_by, fresh, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?)
          ON CONFLICT(cache_key) DO UPDATE SET fresh = excluded.fresh,
                                               created_at = excluded.created_at",
         m.id,
@@ -40,7 +51,6 @@ pub async fn insert_fresh(
         m.pipeline_id,
         m.project_id,
         m.signed_by,
-        fresh,
         m.created_at
     )
     .execute(&mut *conn)

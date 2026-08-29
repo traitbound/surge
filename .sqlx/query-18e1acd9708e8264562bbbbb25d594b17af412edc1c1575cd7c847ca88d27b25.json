@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO materialization (id, content_hash, cache_key, pipeline_id, project_id,\n                                      signed_by, fresh, created_at)\n         VALUES (?, ?, ?, ?, ?, ?, 1, ?)\n         ON CONFLICT(cache_key) DO UPDATE SET fresh = excluded.fresh,\n                                              created_at = excluded.created_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "18e1acd9708e8264562bbbbb25d594b17af412edc1c1575cd7c847ca88d27b25"
+}
