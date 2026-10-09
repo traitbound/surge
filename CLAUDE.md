@@ -32,27 +32,27 @@ Decided 2026-08-08 — this section records the **decisions**, not what is built
 - `.claude/context/` — per-area agent context files (append-only)
 - `crates/` — cargo workspace: `domain` (object model, `ts-rs` derives, INV-ID-2's `pipeline_content_hash`; hash-input changes are `role:critical`), `store` (SQLite/`sqlx`, embedded migrations), `server` (Axum, bin `surge-server`), `cli` (bin `surge`), `compiler` (materialization compiler + INV-ID-1's `materialization_hash` over emitted bytes)
 - `ui/` — Vite + React app; `ui/src/generated/` is ts-rs output (gitignored, regenerate via domain tests, never hand-edit)
-- `integrations/claude-plugin/` — Claude Code plugin (ADR-8): zero-dep Node MCP server (work-order-fetch/span/heartbeat/status tools — four of INV-AUTH-1's five capabilities; claim-lease is the Phase 2 interactive path), abort-guard + span-emission hooks (also the raw-HTTP fallback glue); registered via compiled `.claude/mcp.json` + settings hooks
+- `integrations/claude-plugin/` — host-agnostic MCP server and hook scripts (ADR-8). Codex is the primary runtime (2026-10-09, design §23-Twenty-Three): compiled `.codex/config.toml` registers the server and `.codex/hooks.json` registers the hooks. Four of INV-AUTH-1's five capabilities are exposed (work-order-fetch/span/heartbeat/status); claim-lease is the Phase 2 interactive path. The directory name is the Phase 0 path.
 
 ## Key commands
 
 - `cargo build --workspace` — build everything (set `SQLX_OFFLINE=true` if no dev DB; CI/fresh clones work from committed `.sqlx/`)
 - `cargo test --workspace` — tests; the `surge-domain` test target also regenerates `ui/src/generated/` (ts-rs)
 - Schema-change loop: edit `crates/store/migrations/` → `sqlx migrate run --source crates/store/migrations` (with `DATABASE_URL=sqlite://$PWD/.dev.db`; `sqlx database create` once) → `cargo sqlx prepare --workspace -- --all-targets` → commit `.sqlx/` in the same change
-- `cargo run -p surge-server` — serve `127.0.0.1:7420` (`--db <path>`, default `surge.db`; `--plugin-dir <path>` to run a working plugin tree instead of the embedded copy); serves the embedded UI from `/` — build `ui/` first (`npm run build`) or the page tells you to (assets embed at compile time, ADR-4). The Claude Code plugin is embedded too and extracted to `<db-dir>/.surge/plugin/<version>` at boot, so `SURGE_PLUGIN_DIR` resolves from any cwd
+- `cargo run -p surge-server` — serve `127.0.0.1:7420` (`--db <path>`, default `surge.db`; `--plugin-dir <path>` to run a working plugin tree instead of the embedded copy); serves the embedded UI from `/` — build `ui/` first (`npm run build`) or the page tells you to (assets embed at compile time, ADR-4). The runtime plugin is embedded too and extracted to `<db-dir>/.surge/plugin/<version>` at boot, so `SURGE_PLUGIN_DIR` resolves from any cwd. The tree still lives at `integrations/claude-plugin/`; Codex is the process that loads it.
 - `ui/`: `npm ci` once, then `npm run dev` (proxies to :7420) · `npm run build` · `npm run typecheck`. All three are gated by `ui/scripts/ensure-generated.mjs` (npm `pre*` hooks): `ui/src/generated/` is gitignored ts-rs output, so on a fresh clone the guard runs `cargo test -p surge-domain` for you, or fails naming that exact command when `cargo` is unreachable. No manual ordering to remember — `cargo` and `npm` can be run in either order (smoke walk 5, F3)
 
 ## Conventions
 
 - Monorepo workspaces from day one; one package per deployable/major concern.
 - Vocabulary from `docs/design.md` §01 is binding: pipeline, library, materialization, work order, Board·Plan, Board·Ops, observatory. Don't invent synonyms.
-- Only five things may be written into a bound workplace repo (see design §01 closed exception list / INV-DATA-1): `surge.yaml`, compiled `.claude/` runtime files, pipeline-declared docs, rendered `work_orders/` files, and the surge-managed block inside the repo-root `.gitignore` (that block only, INV-DATA-7). Reads are closed too (INV-DATA-6): declared docs, `work_orders/`, git state.
-- Surge owns the actuator: a runtime supervisor spawns headless `claude -p` workers for leased issues (INV-EXEC-1, ADR-5); it never performs the creative work and never drives interactive sessions.
+- Only five things may be written into a bound workplace repo (see design §01 closed exception list / INV-DATA-1): `surge.yaml`, compiled Codex runtime files (`.codex/`, `.agents/skills/`, `AGENTS.md`), pipeline-declared docs, rendered `work_orders/` files, and the surge-managed block inside the repo-root `.gitignore` (that block only, INV-DATA-7). Reads are closed too (INV-DATA-6): declared docs, `work_orders/`, git state.
+- Surge owns the actuator: a runtime supervisor spawns headless `codex exec` workers for leased issues (INV-EXEC-1, ADR-5); it never performs the creative work and never drives interactive sessions. Codex loads project `.codex/` only when the project is trusted, so each spawn gets an isolated `CODEX_HOME` that marks the worktree trusted and never edits `~/.codex`.
 
 ## Env var names
 
 - `DATABASE_URL` / `SQLX_OFFLINE` — sqlx dev tooling only (compile-time query checking); never read by Surge at runtime.
-- Worker-facing (injected by the supervisor at spawn, INV-AUTH-4): `SURGE_API`, `SURGE_RUN_ID`, `SURGE_ISSUE_ID`, `SURGE_RUNTIME_TOKEN`, `SURGE_PLUGIN_DIR`.
+- Worker-facing (injected by the supervisor at spawn, INV-AUTH-4): `SURGE_API`, `SURGE_RUN_ID`, `SURGE_ISSUE_ID`, `SURGE_RUNTIME_TOKEN`, `SURGE_PLUGIN_DIR`, and `CODEX_HOME` (a per-run directory Surge owns, not the operator's `~/.codex`).
 - CLI-facing (read by the `surge` binary): `SURGE_API` (base URL, default `http://127.0.0.1:7420`), `SURGE_TOKEN` (session token, overrides the config file), `SURGE_CONFIG_DIR` (config dir override; default `~/.config/surge`, token stored at `token`, mode 0600 per INV-AUTH-4).
 
 Record names only here — values go to personal memory or local `.env` (gitignored).

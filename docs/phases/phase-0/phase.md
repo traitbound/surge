@@ -2,6 +2,8 @@
 
 **Status:** **accepted** 2026-08-28 — smoke walk 7 returned **GO** (`smoke-7-2026-08-28.md`, SHA `285b54f`), the first GO across seven walks. Accepted with the exceptions listed below; read them before treating phase 0 as finished.
 
+**2026-10-09 — the actuator's primary runtime is now Codex.** Walks 5–7 proved `claude -p` and `.claude/`. The compiler and supervisor on `task/codex-primary` emit Codex's layout and spawn `codex exec` (design §23-Twenty-Three). The walk record below is unchanged on purpose: it describes what was accepted, not what the tree emits after that date.
+
 **What the acceptance rests on.** Walk 7 was a *scoped* re-walk — walk 6's three findings plus a headline-loop regression check — not a full cold walk of this checklist. The Done-when lines are covered by walks 5, 6 and 7 between them, each on a different SHA. Nine real `claude -p` runs, every success verified against both the DB row and the git object behind it, zero 5xx, clean drain.
 
 **Accepted with these exceptions:**

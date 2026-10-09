@@ -4,8 +4,8 @@
 //! points somewhere real no matter where the operator started the process.
 //!
 //! Before this, `plugin_dir` defaulted to a cwd-relative path; started
-//! anywhere but the source checkout it resolved to nothing, and `claude -p`
-//! tolerated the missing MCP config silently — workers ran blind, with no
+//! anywhere but the source checkout it resolved to nothing, and the headless
+//! worker tolerated the missing MCP config silently — workers ran blind, with no
 //! spans, no heartbeats and no abort guard (smoke re-walk 2026-08-25, NEW-1).
 
 use std::path::{Path, PathBuf};

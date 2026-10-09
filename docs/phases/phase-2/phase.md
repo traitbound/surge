@@ -68,7 +68,7 @@ graph TB
 
     browser["React UI in browser<br/>+ Board·Plan · Board·Ops · live heartbeats"]
     runtime["Claude Code + surge plugin (MCP)<br/>(runtime token via env / surge auth)"]
-    repo[("Bound workplace repo<br/>surge.yaml · .claude/* · declared docs · work_orders/*")]
+    repo[("Bound workplace repo<br/>surge.yaml · .codex/* · .agents/skills/*<br/>AGENTS.md · declared docs · work_orders/*")]
     tracker["External trackers<br/>GitHub · built-in (Linear: interface only)"]
 
     operator --> browser

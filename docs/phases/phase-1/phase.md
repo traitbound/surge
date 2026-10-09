@@ -69,7 +69,7 @@ graph TB
 
     browser["React UI in browser<br/>+ React Flow canvas · library · compile dialog"]
     runtime["Claude Code + surge plugin (MCP)<br/>(runtime token via env / surge auth)"]
-    repo[("Bound workplace repo<br/>surge.yaml · .claude/* · work_orders/*")]
+    repo[("Bound workplace repo<br/>surge.yaml · .codex/* · .agents/skills/*<br/>AGENTS.md · work_orders/*")]
 
     operator --> browser
     browser -->|"human token"| api

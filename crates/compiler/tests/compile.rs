@@ -57,18 +57,24 @@ fn fixture_compiles_deterministically() {
 
     let paths: Vec<&str> = a.files.iter().map(|f| f.rel_path.as_str()).collect();
     assert_eq!(paths, vec![
-        ".claude/agents/doc-writer.md",
-        ".claude/agents/implementer.md",
-        ".claude/mcp.json",
-        ".claude/settings.json",
-        ".claude/skills/write-summary/SKILL.md",
+        ".agents/skills/write-summary/SKILL.md",
+        ".codex/agents/doc-writer.toml",
+        ".codex/agents/implementer.toml",
+        ".codex/config.toml",
+        ".codex/hooks.json",
+        "AGENTS.md",
         "surge.yaml",
     ]);
     // The always-on runtime hooks and the MCP registration are wired in.
-    let settings = &a.files.iter().find(|f| f.rel_path == ".claude/settings.json").unwrap().contents;
-    assert!(settings.contains("poll-abort.sh") && settings.contains("emit-span.sh"), "{settings}");
-    let mcp = &a.files.iter().find(|f| f.rel_path == ".claude/mcp.json").unwrap().contents;
-    assert!(mcp.contains("mcp/server.mjs"), "{mcp}");
+    let hooks = &a.files.iter().find(|f| f.rel_path == ".codex/hooks.json").unwrap().contents;
+    assert!(hooks.contains("poll-abort.sh") && hooks.contains("emit-span.sh"), "{hooks}");
+    // "*" is Codex's documented match-all. An empty matcher would also match,
+    // but a missing or wrong one would leave the abort guard unwired.
+    assert!(hooks.contains("\"matcher\": \"*\""), "{hooks}");
+    let config = &a.files.iter().find(|f| f.rel_path == ".codex/config.toml").unwrap().contents;
+    assert!(config.contains("mcp/server.mjs") && config.contains("required = true"), "{config}");
+    let agent = &a.files.iter().find(|f| f.rel_path == ".codex/agents/implementer.toml").unwrap().contents;
+    assert!(agent.contains("developer_instructions") && !agent.contains("tools:"), "{agent}");
     assert!(a.cache_key.starts_with("mk_") && a.cache_key.ends_with("..fixture"));
 
     // Capability report (§04): the doc write, no shell, implementer holds WebSearch.
@@ -115,15 +121,15 @@ fn write_to_repo_lands_files_and_maintains_gitignore_block() {
     write_to_repo(repo.path(), &compiled).unwrap();
     write_to_repo(repo.path(), &compiled).unwrap(); // idempotent upsert
 
-    assert!(repo.path().join(".claude/agents/implementer.md").is_file());
+    assert!(repo.path().join(".codex/agents/implementer.toml").is_file());
     assert!(repo.path().join("surge.yaml").is_file());
-    let stamp = std::fs::read_to_string(repo.path().join(".claude/surge-materialization.json")).unwrap();
+    let stamp = std::fs::read_to_string(repo.path().join(".codex/surge-materialization.json")).unwrap();
     assert!(stamp.contains(&compiled.materialization_hash));
 
     let gi = std::fs::read_to_string(repo.path().join(".gitignore")).unwrap();
     assert!(gi.starts_with("target/\n"), "user entries preserved");
     assert_eq!(gi.matches("# >>> surge-managed").count(), 1, "block upserted, not appended");
-    assert!(gi.contains(".claude/settings.json"));
+    assert!(gi.contains(".codex/config.toml"));
     assert!(gi.contains("work_orders/"));
     assert!(!gi.contains("\nsurge.yaml"), "surge.yaml stays committed (INV-DATA-7)");
 

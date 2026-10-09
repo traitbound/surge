@@ -22,7 +22,7 @@ graph TB
 
     browser["React UI in browser<br/>React Flow canvas — projection of API state"]
     runtime["IDE runtimes<br/>Claude Code · Cursor · Codex<br/>(runtime token)"]
-    repo[("Bound workplace repos<br/>surge.yaml · .claude/* · declared docs<br/>work_orders/* · .gitignore surge block")]
+    repo[("Bound workplace repos<br/>surge.yaml · .codex/* · .agents/skills/*<br/>AGENTS.md · declared docs<br/>work_orders/* · .gitignore surge block")]
     tracker["External trackers<br/>Linear · GitHub · built-in"]
     stategit[("surge-state.git<br/>operator-configured backup remote")]
 
@@ -86,7 +86,7 @@ Everything stateful lives in one embedded SQLite database inside one Rust proces
 **Why:** "one local service on one port" is the product frame; distribution and upgrade become copying one file.
 
 ### ADR-5 — Surge owns the actuator: a runtime supervisor spawns headless workers
-**Decision:** the binary contains a runtime supervisor that spawns headless `claude -p` processes — one per dispatched issue holding a lease, capped by the phase's max-parallel. Interactive sessions remain human-launched and only claim leases (INV-EXEC-1).
+**Decision:** the binary contains a runtime supervisor that spawns headless workers — one per dispatched issue holding a lease, capped by the phase's max-parallel. As of 2026-10-09 the worker command is `codex exec` (design §23-Twenty-Three). The original decision was `claude -p`. Interactive sessions remain human-launched and only claim leases (INV-EXEC-1).
 **Alternatives rejected:** an external agent daemon polling for work (a fifth process nobody specified, breaking the one-binary frame); human-drained dispatch queue (reduces §06's queue policy, auto-retry and budgets to advisory fiction and makes Phase 2's acceptance criteria unsatisfiable).
 **Why:** design §16 already records a dispatch kind of `headless claude -p` — Surge knowing how a run was launched only makes sense if it launched it. This narrows the spec non-goal: Surge never performs the creative work, but it does own process lifecycle. (design §23-Six)
 
@@ -101,7 +101,7 @@ Everything stateful lives in one embedded SQLite database inside one Rust proces
 **Why:** worktrees give branch-isolated filesystems sharing one object store — exactly the wave-integration model, which rebases the task branches the worktrees produced. (design §23-Ten)
 
 ### ADR-8 — Claude Code plugin over MCP as the runtime integration
-**Decision:** the primary runtime integration is a Claude Code plugin (`integrations/claude-plugin/`) bundling an MCP server that exposes the five runtime-token capabilities as typed tools plus the span/guard hooks; compiled `.claude/settings.json` registers it. Raw hook-script HTTP glue is the fallback for MCP-less runtimes.
+**Decision:** the primary runtime integration is an MCP server (`integrations/claude-plugin/`) that exposes the runtime-token capabilities as typed tools, plus the span/guard hooks. As of 2026-10-09 Codex is the host: compiled `.codex/config.toml` registers the server and `.codex/hooks.json` registers the hooks (design §23-Twenty-Three). The 2026-08-12 decision registered the same server from `.claude/settings.json` for Claude Code. Raw hook-script HTTP glue remains the fallback for MCP-less runtimes.
 **Alternatives rejected:** hook-scripts-only (shell glue, no typed contract, fragile across runtime versions — kept only as fallback); forking or wrapping the runtime binary (maintenance treadmill, breaks "runtimes are thin clients").
 **Why:** Claude Code speaks MCP natively, so the riskiest Phase 0 assumption (hooks can implement fetch/spans/abort-poll) gets a supported protocol instead of curl; and one MCP server is the reusable template for the post-V3 Cursor/Codex adapters. (design §23-Eighteen)
 

@@ -25,11 +25,9 @@ use surge_domain::observatory::{Run, RunKind, RunStatus, Span, SpanRole, SpanSta
 
 #[derive(Clone)]
 pub struct SupervisorConfig {
-    /// Worker command. The work order is delivered on the worker's STDIN,
-    /// never as a positional argument — Claude Code's `--mcp-config` is
-    /// variadic and swallows a following positional (smoke 2026-08-25, F2).
-    /// Default is the real thing; tests substitute a script (INV-EXEC-1 cares
-    /// who spawns, not what).
+    /// Worker command. The prompt is delivered on STDIN. Codex reads it when
+    /// the command ends in `-` (`codex exec -`). Tests substitute a script
+    /// (INV-EXEC-1 cares who spawns, not what).
     pub worker_cmd: Vec<String>,
     /// §06: TTL 10 minutes.
     pub lease_ttl_ms: i64,
@@ -37,8 +35,10 @@ pub struct SupervisorConfig {
     pub work_dir: PathBuf,
     /// Injected as SURGE_API so hooks/tools can reach Surge (INV-DEPLOY-1 exemption).
     pub api_base: String,
-    /// Where the Claude Code plugin lives; injected as SURGE_PLUGIN_DIR — the
-    /// compiled .claude/mcp.json and settings.json hooks resolve against it.
+    /// Where the runtime plugin lives; injected as SURGE_PLUGIN_DIR. The
+    /// compiled `.codex/config.toml` and hooks resolve against it. The
+    /// directory name is still `claude-plugin`: the MCP server and hook
+    /// scripts are host-agnostic, and Codex is what spawns them.
     /// It has no default: see [`SupervisorConfig::new`].
     pub plugin_dir: PathBuf,
     /// How often the watchdog looks at the lease clock and the child.
@@ -67,10 +67,13 @@ impl SupervisorConfig {
     pub fn new(plugin_dir: PathBuf) -> Self {
         Self {
             worker_cmd: vec![
-                "claude".into(),
-                "-p".into(),
-                "--mcp-config".into(),
-                ".claude/mcp.json".into(),
+                "codex".into(),
+                "exec".into(),
+                "--sandbox".into(),
+                "workspace-write".into(),
+                "--ask-for-approval".into(),
+                "never".into(),
+                "-".into(),
             ],
             lease_ttl_ms: 10 * 60 * 1000,
             work_dir: PathBuf::from("surge-worktrees"),
@@ -624,6 +627,20 @@ async fn unobserved(state: &AppState, run_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Isolated Codex home for this worktree. Trust for the project path lives
+/// here, outside the bound repo (INV-DATA-1) and outside `~/.codex`.
+fn write_codex_home(cfg: &SupervisorConfig, worktree: &std::path::Path) -> anyhow::Result<PathBuf> {
+    let worktree = absolutize(worktree)?;
+    let key = worktree.to_string_lossy().replace('/', "_");
+    let home = absolutize(&cfg.work_dir)?.join("codex-home").join(key);
+    std::fs::create_dir_all(&home)?;
+    std::fs::write(
+        home.join("config.toml"),
+        surge_compiler::codex_trust_config(&worktree.to_string_lossy()),
+    )?;
+    Ok(home)
+}
+
 /// Spawn a worker: prompt on stdin, stderr tailed into a channel so a failed
 /// worker's actual error is a visible record, not a discarded pipe
 /// (smoke 2026-08-25, F4; INV-ERR-1).
@@ -636,13 +653,15 @@ fn spawn_worker(
     let plugin_dir = absolutize(&cfg.plugin_dir)?;
     // Fail loud, never spawn blind: without a real plugin tree the worker
     // gets no MCP tools and no hooks, so it cannot append spans, heartbeat,
-    // or see an abort — and `claude -p` exits 0 regardless (NEW-1).
+    // or see an abort — and a headless worker can still exit 0 (NEW-1).
     crate::plugin_assets::verify(&plugin_dir)?;
+    let codex_home = write_codex_home(cfg, dir)?;
     let mut cmd = tokio::process::Command::new(&cfg.worker_cmd[0]);
     cmd.args(&cfg.worker_cmd[1..])
         .current_dir(dir)
         .env("SURGE_API", &cfg.api_base)
         .env("SURGE_PLUGIN_DIR", &plugin_dir)
+        .env("CODEX_HOME", &codex_home)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -972,7 +991,7 @@ async fn monitor(
             RunStatus::Failed,
             Some(
                 "worker exited 0 but appended no spans and never heartbeated — it could not \
-                 reach Surge (check plugin registration in the compiled .claude/)"
+                 reach Surge (check plugin registration in the compiled .codex/)"
                     .to_string(),
             ),
         ),
@@ -1131,19 +1150,17 @@ pub async fn dispatch_doc_run(
     )
     .await?;
     let cfg = &state.supervisor;
-    // Scoped to the doc node, deliberately. "Run the doc pipeline compiled
-    // into .claude/" pointed the worker at a directory that carries EVERY
-    // node kind's agents — the compiled tree is the whole materialization,
-    // not a per-run subset — so the worker also attempted the agent node,
-    // found no work order behind it, and self-reported a refusal. The
-    // Observatory then rendered a green `succeeded` run containing a red
-    // `refused` row (smoke walk 5, F6). A doc run has no issue and no lease
-    // (design §23-Fourteen); its whole job is the declared doc.
-    let prompt = "Run ONLY the doc node of the pipeline compiled into .claude/ for this project: \
-                  produce the docs it declares, in this repo, and stop. The compiled .claude/ \
-                  also carries the agents for work-order nodes — those belong to leased issues, \
-                  not to this run; do not attempt them. Use the surge MCP tools as you work: \
-                  surge_append_span for progress, surge_poll_run to check for aborts.\n";
+    // Scoped to the doc node, deliberately. Pointing the worker at the whole
+    // compiled tree made it attempt the agent node as well, find no work
+    // order, and self-report a refusal. The Observatory then rendered a
+    // green `succeeded` run containing a red `refused` row (smoke walk 5, F6).
+    // A doc run has no issue and no lease (design §23-Fourteen); its whole
+    // job is the declared doc.
+    let prompt = "Run ONLY the doc node of the pipeline compiled into .codex/ and .agents/skills/ \
+                  for this project: produce the docs it declares, in this repo, and stop. The \
+                  compiled tree also carries the agents for work-order nodes — those belong to \
+                  leased issues, not to this run; do not attempt them. Use the surge MCP tools \
+                  as you work: surge_append_span for progress, surge_poll_run to check for aborts.\n";
     // The run row exists and the credential is minted, so a spawn failure
     // owes the same cleanup a work-order dispatch owes — issue-less variant.
     // Propagating with `?` here leaked a permanently `running` run, a live

@@ -95,8 +95,8 @@ async fn seeded_pipeline_compiles_cleanly() {
         .await
         .unwrap();
     assert_eq!(r.status(), StatusCode::OK, "a fresh seeded instance compiles out of the box");
-    assert!(repo.path().join(".claude/agents/doc-writer.md").is_file());
-    assert!(repo.path().join(".claude/skills/write-summary/SKILL.md").is_file());
+    assert!(repo.path().join(".codex/agents/doc-writer.toml").is_file());
+    assert!(repo.path().join(".agents/skills/write-summary/SKILL.md").is_file());
 }
 
 /// ESC-1 regression (INV-ID-2). The seeded pipeline's `content_hash` was a

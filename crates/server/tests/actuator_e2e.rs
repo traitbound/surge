@@ -47,7 +47,7 @@ async fn setup(worker_script: &str) -> Env {
             String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     }
 
-    // Worker: a script standing in for `claude -p` (the supervisor cares
+    // Worker: a script standing in for `codex exec` (the supervisor cares
     // about spawn/exit/lease mechanics, not what the worker thinks).
     let script = work.path().join("worker.sh");
     std::fs::write(&script, worker_script).unwrap();
@@ -243,7 +243,7 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
          echo \"run=$SURGE_RUN_ID tok=${SURGE_RUNTIME_TOKEN%%${SURGE_RUNTIME_TOKEN#rt_}} plugin=$SURGE_PLUGIN_DIR\" > \"$OUT\"\n\
          echo \"$stdin\" | grep -q 'Work order — Fixture task' && echo stdin-workorder >> \"$OUT\"\n\
          echo \"$stdin\" | grep -q 'surge_fetch_work_order' && echo stdin-fetchtool >> \"$OUT\"\n\
-         test -f .claude/settings.json && echo compiled >> \"$OUT\"\n\
+         test -f .codex/config.toml && echo compiled >> \"$OUT\"\n\
          test -f \"work_orders/$SURGE_ISSUE_ID.md\" && echo workorder >> \"$OUT\"\n\
          git rev-parse --abbrev-ref HEAD >> \"$OUT\"\n\
          echo note > note.md\n\
@@ -294,7 +294,7 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
     assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Verified);
     assert!(issue.lease.is_none());
     wait_reaped(&worktree_dir(&env)).await; // reaped at lease end (INV-EXEC-2)
-    assert!(!env.repo.path().join(".claude").exists(), "bound repo untouched (INV-DATA-1)");
+    assert!(!env.repo.path().join(".codex").exists(), "bound repo untouched (INV-DATA-1)");
 }
 
 #[tokio::test]
@@ -347,7 +347,7 @@ async fn doc_run_without_fresh_materialization_refuses_with_a_visible_run() {
         && a.subject.contains("compile first")),
         "audited with its reason and its project (INV-ERR-1, N13): {audit:?}");
     // Nothing was spawned: the bound repo is untouched (INV-DATA-1).
-    assert!(!env.repo.path().join(".claude").exists());
+    assert!(!env.repo.path().join(".codex").exists());
 }
 
 /// ESC-2 / INV-ERR-1 + INV-OBS-1: the interactive claim path (INV-AUTH-1's
@@ -607,8 +607,8 @@ async fn worker_stderr_tail_is_a_visible_record() {
 }
 
 /// NEW-1 regression: a plugin dir without its MCP entry point must refuse the
-/// spawn — a worker with no tools and no hooks runs blind, and `claude -p`
-/// exits 0 regardless, which would report `verified` with nothing behind it.
+/// spawn — a worker with no tools and no hooks runs blind, and a headless
+/// worker exits 0 regardless, which would report `verified` with nothing behind it.
 #[tokio::test]
 async fn missing_plugin_tree_refuses_the_spawn() {
     let env = setup("#!/bin/sh\nexit 0\n").await;
@@ -987,7 +987,7 @@ async fn a_runtime_token_dies_with_its_run() {
 }
 
 /// F6: a `succeeded` doc run held a `refused` span, because the prompt said
-/// "run the doc pipeline compiled into .claude/" and the compiled tree
+/// "run the doc pipeline compiled into .codex/" and the compiled tree
 /// carries every node kind's agents — so the worker also attempted the agent
 /// node and self-reported a refusal. The Observatory rendered a green run
 /// with a red row in it. The prompt is scoped to the doc node now, and says
