@@ -1,85 +1,66 @@
-# Phase 1.1 — The faithful canvas
+# Phase 1.1 — Minimal faithful authoring
 
 **Status:** not_started
-**Parent:** [phase-1](../phase-1/phase.md) · **Epic 1 of 3, runs first**
-**Commitment level:** Phase 1 — ships to the operator.
-**Time horizon:** ~2 weeks — the least defensible estimate in the plan (carried from the parent, 2026-08-12). If it slips, cut from 1.3 first; nothing in this epic is cuttable without losing the thesis.
+**Replanned:** 2026-10-12
+**Depends on:** [phase-0.1](../phase-0.1/phase.md)
+**Estimate:** unestimated; size the next slice against its acceptance evidence before assigning dates.
 
 ## Purpose
 
-Prove the architectural thesis of phase 1: **what you draw is exactly what materializes.** A pipeline authored on the canvas and the same pipeline pasted as text must compile to the same hash, and presentation state must never touch that hash. Every later epic consumes an editable, versioned pipeline object; until the hash contract holds, nothing built on it can be trusted.
-
-This is the load-bearing epic (diagnostic Q2) and runs first for the same reason Phase 0 proved the actuator before the canvas: the risky claim goes first, even ugly.
+Author, assign and compile a small pipeline with a durable identity. Hash fidelity is necessary evidence here; graph-driven execution is a separate acceptance in 1.2.
 
 ## In scope
 
-1. **Pipeline editor core**: React Flow canvas, all six node kinds **rendered and round-tripped**, edges with triggers and required-gate locks, multi-select, undo/redo (design §11).
-   *Clarified 2026-08-28 during spec grounding:* `NodeConfig::Block` is one of the six kinds in the domain (`crates/domain/src/pipeline.rs:76-81`) and its `members`/`exposed_params` are hashed (`crates/domain/src/hash.rs:56` *(pre-move: `crates/compiler/src/hash.rs:38`, relocated by ESC-4)*). A Block node must therefore render, load, save and hash correctly **here** — the round-trip contract is not satisfiable with a kind missing. What moves to 1.3 is the *authoring UX*: composing a block from a selection, collapse/expand affordances, exposing parameters, palette publish. In 1.1 a Block renders as one opaque node and survives edit/save unchanged.
-2. **Pipeline read/write API**: `crates/server/src/human_api.rs` exposes **no** pipeline route today (verified 2026-08-28 — the router carries projects, issues, runs, audit and compile only), while `crates/store/src/pipelines.rs` already has `insert_graph`/`load_graph`. The canvas needs that seam; it is in this epic, not assumed.
-3. **UI scaffolding**: `ui/package.json` has exactly two dependencies today, `react` and `react-dom`. React Flow (`@xyflow/react`), TanStack Router/Query and Tailwind are *decisions* in CLAUDE.md and marked **(P1)** in the code map — none is installed. That cost lands here.
-4. **Two-way code sync**: canvas ⇄ textual pipeline representation (the Phase 0 data format becomes the paste/round-trip format). Hash inputs per INV-ID-2: semantic content only, presentation state never hashed.
-5. **Pipeline versioning**: fork with provenance, version history, blessed flag (INV-DATA-3); project-local edits create a local revision hash immediately, promote-to-fork adopts it (INV-ID-3, design §23-Nine). The history *surface* (list, diff view) is 1.3; the identity machinery is here.
-
-## Out of scope
-
-- Block **authoring UX** — composing from a selection, collapse/expand, exposed parameters, palette publish → 1.3 (deliberately: the parent's named first cut must not sit in the epic that proves the thesis). Block *rendering and round-trip* stay here; see in-scope 1
-- Library, trust, compile dialog, upgrade review → 1.2
-- Pipelines page, project overview, canvas modes, EVAL tab → 1.3
-- Everything in the parent's whole-phase Out of scope
+1. First repair legacy placeholder pipeline-hash metadata through the assignment prerequisite slice, preserving graph ids/content and recorded runs/materialization hashes with an audited versioned correction. Then expose hash-bearing reads, pipeline assignment and optional compile targeting; expose assignment, local revision, actual compiled source and freshness separately.
+2. Durable project-local revisions, immutable published versions and promote-to-fork provenance. Semantic mutations commit atomically with audit and stale materialization; layout/label changes persist without changing the semantic hash.
+3. Minimal canvas with six existing node kinds, opaque Block rendering, explicit edges, inspector, selection and undo/redo. Each completed mutation is saved; drag commits on gesture completion, not every pointer movement.
+4. Text export/import with ids preserved, deterministic second export and lossless edge triggers. Add UI dependencies only where needed for the slice.
 
 ## Done when
 
-- A pipeline exported to text and pasted back **round-trips to the same hash** (INV-ID-2). *(Amended 2026-08-28: the line previously said "drawn from scratch … same hash as its pasted textual form", which is false as stated — node and edge `id` are hash inputs (`crates/domain/src/hash.rs:79-92` *(pre-move: `crates/compiler/src/hash.rs:61-74`, relocated by ESC-4)*), so a graph redrawn by hand mints different ids and hashes differently, however identical it looks. Fidelity is a property of the round-trip carrying ids across, not of two independent authoring routes converging. Making it converge would mean canonicalizing ids out of the hash — `role:critical`, and not this epic's job.)*
-- Moving a node or renaming its label changes **no** hash — proved on the payload the **canvas produces after a UI mutation**, not on the compiler's own fixtures. *(Amended 2026-08-28, spec review: frames and stickies dropped from this line — they have no domain type, no table and no owning spec, and belong with the annotate palette in 1.3. The compiler-level version of this assertion is already green at `crates/compiler/tests/compile.rs:48`, so a canvas AC that stops there proves nothing about the canvas.)*
-- Editing a project canvas immediately shows `vN + local rev <hash>` on the assignment line; promote-to-fork names that revision as the fork's provenance (INV-ID-3). *(Decided 2026-08-28: the canvas **commits on mutation** — there is no browser-side unsaved buffer. A buffered model would leave a project reading plain `vN` while local edits existed, which INV-ID-3 forbids in as many words.)*
-- Forking a blessed template, editing the fork and compiling leaves the template's hash and history untouched.
-- Round-tripping canvas → text → canvas → text produces byte-identical text on the second pass for every one of the six node kinds.
-
-*Each line above names an exercisable surface. That is deliberate: three of seven phase-0 walks found a Done-when line asserting something the tree did not do (`smoke-patterns.md`, walk-5 F2 / walk-6 R2 / walk-7 W1).*
-
-## Architecture (this epic)
-
-Strict subset of the parent. Same containers as Phase 0; the browser grows the canvas and the round-trip seam only. No library surfaces, no dialogs.
-
-```mermaid
-graph TB
-    operator([Operator - single user])
-
-    subgraph binary["Surge binary — Rust · 127.0.0.1:7420"]
-        api["Axum HTTP API<br/>human-token & runtime-token routes"]
-        db[("SQLite — embedded, single file<br/>entities · runs/spans · audit<br/>+ pipeline versions & provenance")]
-        compiler["Materialization compiler<br/>pipeline × project → files<br/>INV-ID-2 hash inputs"]
-        supervisor["Runtime supervisor (single-task)"]
-        ui_assets["Embedded React UI"]
-    end
-
-    browser["React UI in browser<br/>+ React Flow canvas (six node kinds, edges/gates)<br/>+ canvas ⇄ code round-trip"]
-    repo[("Bound workplace repo")]
-
-    operator --> browser
-    browser -->|"human token"| api
-    ui_assets --> browser
-    api --> db
-    compiler --> db
-    compiler -->|"writes compiled files"| repo
-    supervisor --> db
-```
+- A populated pre-ESC-1 database upgrades without deletion or graph/run/history changes; repair is audited once and idempotent. Hash-bearing reads are enabled only after it completes.
+- CLI/API assignment drives default compile, reassignment invalidates a mismatching materialization and stale dispatch is refused visibly.
+- A semantic edit returns a durable revision hash and stales compilation atomically; UI shows saving until acknowledgement and blocks compile/dispatch while saving or failed. Retry preserves the attempted edit; failure never claims it is saved.
+- Presentation-only mutations preserve the semantic hash and materialization freshness. Undo/redo of a semantic mutation creates a new revision rather than rewriting history.
+- All six kinds survive API/canvas/text round-trip; a custom trigger named `passed` remains Custom, not Passed. Export → import → export is byte-identical for supported graph state.
+- Forking preserves graph ids and source hash/provenance while leaving the published source untouched.
 
 ## Anticipated specs
 
-| Feature | Hint |
+| Feature | Contract |
 |---|---|
-| pipeline-assignment | assignment data path (store + endpoint) — **spec'd first**. *(The `content_hash` half of this hint was done outside the sprint by ESC-1 on 2026-08-28.)* |
-| pipeline-revisions | the project-local revision entity, its lifecycle, materialization staleness, run recording |
-| promote-to-fork | fork semantics, provenance, blessed preservation, id-preserving hash equality |
-| canvas-editor | React Flow, six node kinds (Block opaque), palette creation, edges/gates, selection, undo/redo, the pipeline HTTP seam, UI scaffolding |
-| code-roundtrip | canvas ⇄ text format, hash-fidelity contract, byte-identical second pass, id minting, lossy `EdgeTrigger::parse` |
+| pipeline-assignment | Assignment and compile targeting; existing draft |
+| pipeline-revisions | Revision lifecycle, mutation persistence and freshness |
+| promote-to-fork | Immutable source, provenance and id preservation |
+| canvas-editor | Minimal mutation-persisted graph UI; existing draft needs review |
+| code-roundtrip | Lossless stored/text graph, ids and presentation fidelity |
 
-**`pipeline-versioning` split into three, 2026-08-28.** Drafted as one spec, it drew 28 blockers across two fresh reviews. The cause was breadth, not prose: it carried assignment, the revision entity, forking, staleness integration, compile targeting, run recording and a hash backfill, compressed to exactly the 8-AC cap — which was gaming the cap, not respecting it. Each round the design collided with substrate the spec was too broad to have grounded: `materialization.pipeline_id` has no `ON DELETE` action, so deleting a compiled revision is FK-blocked; the compiled `surge.yaml` carries the pipeline **name** into a committed file (`crates/compiler/src/emit.rs:161`), so a synthetic revision name would land in the operator's git history. Five specs in this epic, not three.
+## Out of scope
 
-**Spec order inverted 2026-08-28.** The list was authored canvas-first. Grounding the canvas spec established that commit-on-mutation is what INV-ID-3 requires, which makes the project-local revision entity a *prerequisite* of the canvas rather than a consequence of it. `pipeline-versioning` is spec'd first.
+Library authoring (1.3), broad pipelines/overview pages, block composition, grouping, EVAL, dry run and visual diff (3.1). No graph-execution claim until 1.2.
 
-## Known defects this epic must own
+## Architecture
+
+Phase 0 containers plus graph/revision APIs and the minimal canvas; supervisor remains single-worker.
+
+```mermaid
+graph LR
+    operator[Operator] --> ui[Embedded React UI / CLI]
+    ui --> api[Axum human API]
+    api --> db[(Embedded SQLite)]
+    api --> compiler[Materialization compiler]
+    compiler --> repo[Bound repo / isolated worktree]
+    api --> supervisor[Codex supervisor]
+    supervisor --> worker[Codex worker]
+    worker --> runtime[Scoped runtime API]
+    runtime --> db
+```
+
+## Acceptance evidence
+
+Local suites are regression evidence. Acceptance additionally needs a dated walk recording the commit, runtime version where relevant, observable rows/files/git objects, adverse cases, and any explicitly accepted exception. No phase closes from a spec status or passing mock-worker test alone.
+
+## Carry-forward defects and decisions (2026-08-28–29)
 
 | Defect | Evidence | Owner |
 |---|---|---|
@@ -87,7 +68,7 @@ graph TB
 
 Latent in phase 0 because pipelines are seeded, never authored. The canvas is what exposes it.
 
-| **A pre-existing `surge.db` keeps the old placeholder `content_hash`.** ESC-1 (`3ecd585`) makes the seed derive the hash before insert, but its `exists()` guard skips databases that already hold the row, and correcting it in place would need an update on a published pipeline version (INV-DATA-3). **Remedy: delete the local dev DB.** Inert today — nothing in production reads the column; `crates/server/src/compile_api.rs:43` loads the graph and `crates/compiler/src/lib.rs:119` recomputes the hash from it. It stops being inert the moment a phase-1.1 feature reads the column | ESC-1 review, 2026-08-28 | **discharged** by `pipeline-assignment` as a stated walk precondition ("delete the dev DB before walking") — the trigger condition is now met, since its AC 1 and AC 7 read the column |
+| **A pre-existing database keeps placeholder `content_hash`.** Seed `exists()` skips existing rows. Reads that surface the column require an assignment-owned prerequisite repair preserving recorded runs and audit/provenance; disposable walk databases can be recreated, but existing operator state must not be deleted to make acceptance pass. | ESC-1 review, 2026-08-28; replan 2026-10-12 | `pipeline-assignment` prerequisite, before its hash-bearing reads |
 | **`insert_graph` accepts whatever hash it is handed**, so the ESC-1 fix is one caller away from regressing. Today the seed is the only production caller (verified by grep across `crates/`, `ui/`, `integrations/`) | ESC-1 review, 2026-08-28 | **fixed 2026-08-29 by ESC-4** — `insert_graph` now derives `content_hash` from the graph it is inserting and returns it; the handed-in value is superseded. The second caller `pipeline-revisions` adds inherits this for free |
 
 | **The two claim-lease refusals disagree about their audit subject.** `claim_lease`'s pre-existing `Ok(false)` branch records `subject = issue_id`; every other refusal records `subject = reason` (3 of 4). More sharply: `audit_entry` has **no `issue_id` and no `run_id` column** (`crates/store/migrations/0002_object_model.sql:200-207`), so `subject` is the only slot that can name the thing acted on — the new refusal row cannot identify *which issue* was refused from the audit trail alone, only by project + timestamp. Unify to `"{issue_id} — {reason}"`, the shape `runtime_api::refuse` already uses | ESC-2 review, 2026-08-28 | unassigned |
@@ -95,7 +76,7 @@ Latent in phase 0 because pipelines are seeded, never authored. The canvas is wh
 | **`dispatch_doc_run`'s unknown-project branch is still a recordless 500** (`crates/server/src/supervisor.rs`), while `dispatch_issue`'s analogue writes an audit row. The fourth refusal-shaped path; deliberately out of ESC-2's scope | ESC-2 review, 2026-08-28 | unassigned |
 
 | ~~**`insert_fresh` lets a caller falsify the `NotCompiled` premise.**~~ **RESOLVED by ESC-5 (PR #7):** `insert_fresh` no longer reads `m.fresh` for the INSERT — the query hardcodes the literal, so no argument can produce a non-fresh row. Stronger than the `ensure!` this row suggested: the bad call is now unwritable rather than refused at runtime (walk-5 F1 pattern), and a reviewer verified the `ON CONFLICT` branch is covered too. **Consequence for `pipeline-revisions`:** the staling write that produces `Stale` — a project left with materializations of which none is fresh — can no longer be expressed by passing `fresh: false` to `insert_fresh`. It needs its own function. Original finding:  `crates/store/src/materializations.rs` writes `fresh` from the caller's struct. A caller passing `fresh: false` would stale the predecessors and insert a non-fresh successor — producing the `EXISTS(any) AND NOT EXISTS(fresh)` state that `NotCompiled`'s correctness depends on being unreachable, and the pill would then say "not compiled" about a project that *has* compiled. No caller does this today (the sole production caller sets `fresh: true`), so the premise is enforced by convention, not by the type system. `ensure!(m.fresh, …)` makes it structural | ESC-3 review, 2026-08-28 | `pipeline-revisions` — the task that makes the distinction load-bearing |
-| **The project card's badge slot hides `unbound repo` behind `not compiled`.** `ui/src/registry.tsx` keeps a mutually-exclusive ternary whose first branch used to be unreachable and is now the common case, so a project that is both unbound *and* uncompiled shows "not compiled" while its actual next action is **bind**. Rare today because the UI create flow binds immediately, but it is a real user-visible change no test pins | ESC-3 review, 2026-08-28 | `project-overview` (1.3) or a direct fix |
+| **The project card's badge slot hides `unbound repo` behind `not compiled`.** `ui/src/registry.tsx` keeps a mutually-exclusive ternary whose first branch used to be unreachable and is now the common case, so a project that is both unbound *and* uncompiled shows "not compiled" while its actual next action is **bind**. Rare today because the UI create flow binds immediately, but it is a real user-visible change no test pins | ESC-3 review, 2026-08-28 | `project-overview` (3.1) or a direct fix |
 | **`materialization.project_id` is not indexed.** SQLite creates no index for a foreign-key child column; the only index in the schema is `span_by_run`. The derived-status subquery is therefore a correlated full scan of `materialization` per project row. Irrelevant at single-user local scale, but the reason is worth stating correctly — add `CREATE INDEX materialization_by_project ON materialization(project_id)` whenever the next migration touches that table | ESC-3 review, 2026-08-28 | next migration author |
 | **`POST /api/projects` commits the project insert and its audit row as two separate pool calls**, unlike the transactional pattern the bind path uses — an INV-DATA-8 gap on the create path. Pre-existing, unrelated to ESC-3 | ESC-3 review, 2026-08-28 | unassigned |
 
@@ -129,6 +110,9 @@ Five review rounds in this epic averaged ~12 blockers each. A large share were t
 
 The reviews were not the problem: every grounded claim's *inference* held in the last round. The over-reach was.
 
-## Scoping assumptions
 
-- verify at spec time: the Phase 0 pipeline data format is expressive enough to be the round-trip format. Canvas-only state (positions, frames, stickies) is excluded from the hash by INV-ID-2, so lossiness there cannot break fidelity — but it *can* break the byte-identical second pass, which is why that is a separate Done-when line.
+Historical line anchors describe the reviewed commit. Open findings remain open until their owning change supplies evidence; the replan does not mark them fixed. Recordless refusals and refusal-id collisions are owned by 1.2; project-create/audit atomicity by 1.1; the materialization index by the next relevant schema migration.
+
+## Feature order
+
+Assignment identity-repair slice → assignment/list/compile targeting → revisions and graph API/DTO → minimal canvas and text round-trip → promote-to-fork acceptance. Text-trigger repair must precede dependent mutation acceptance. The canvas consumes revision-owned writes, never introduces a competing save endpoint.

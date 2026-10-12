@@ -1,0 +1,35 @@
+{
+  "source_base_commit": "210b2114a4b10bad7236431864724ce78eb02434",
+  "runtime": "codex-cli 0.160.0",
+  "fixture": "/tmp/surge-acceptance-20261012-lragtw3k",
+  "doc_run": {
+    "run_id": "run_98160ef50d3f",
+    "status": "succeeded",
+    "declared_output": "docs/summary.md",
+    "output_bytes": 2918,
+    "output_sha256": "55d24c52f1f985a4bc21f9431c32db33fb5b0550a3e3e1e6c0ad4f13f70adda0",
+    "fixture_main_head_unchanged": "6446d525f2badcf7f137f1b01f16db63d1aff973",
+    "runtime_token_revoked": true,
+    "observed_mcp_and_hook_spans": true
+  },
+  "silent_lease_expiry": {
+    "run_id": "run_e844aeaffeb4",
+    "readiness_span_seen": true,
+    "exact_worker_suspended": true,
+    "disposable_lease_deadline_accelerated_from_ms": 1791797186199,
+    "disposable_lease_deadline_accelerated_to_ms": 1791796585573,
+    "status": "failed",
+    "lease_released": true,
+    "runtime_token_replay_http_status": 401,
+    "forbidden_output_absent": true,
+    "temporary_auth_home_removed": true
+  },
+  "required_mcp_startup_failure": {
+    "run_id": "run_eae0bad6c37c",
+    "status": "failed",
+    "visible_error_contains": "required MCP servers failed to initialize: surge",
+    "lease_released": true,
+    "runtime_token_revoked": true,
+    "forbidden_output_absent": true
+  }
+}

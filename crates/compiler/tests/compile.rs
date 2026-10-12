@@ -73,6 +73,9 @@ fn fixture_compiles_deterministically() {
     assert!(hooks.contains("\"matcher\": \"*\""), "{hooks}");
     let config = &a.files.iter().find(|f| f.rel_path == ".codex/config.toml").unwrap().contents;
     assert!(config.contains("mcp/server.mjs") && config.contains("required = true"), "{config}");
+    // These four run-scoped runtime tools must work without an interactive
+    // approval prompt. `auto` asks for approval and `never` cannot answer it.
+    assert!(config.contains("default_tools_approval_mode = \"approve\""), "{config}");
     let agent = &a.files.iter().find(|f| f.rel_path == ".codex/agents/implementer.toml").unwrap().contents;
     assert!(agent.contains("developer_instructions") && !agent.contains("tools:"), "{agent}");
     assert!(a.cache_key.starts_with("mk_") && a.cache_key.ends_with("..fixture"));
@@ -81,7 +84,9 @@ fn fixture_compiles_deterministically() {
     assert_eq!(a.report.writes, vec!["docs/summary.md"]);
     assert_eq!(a.report.shell_count, 0);
     assert_eq!(a.report.network, vec!["implementer"]);
-    assert!(a.report.egress.contains("all egress refused"));
+    assert!(a.report.egress.contains("not enforced"));
+    assert!(a.report.egress.contains("network access enabled"));
+    assert!(!a.report.egress.contains("all egress refused"));
 }
 
 #[test]

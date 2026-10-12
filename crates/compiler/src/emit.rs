@@ -114,13 +114,7 @@ pub fn codex_trust_config(worktree: &str) -> String {
          # Project .codex/ layers load only when this path is trusted.\n\
          [projects.{}]\n\
          trust_level = \"trusted\"\n\
-         \n\
-         # workspace-write denies network unless this is set, and\n\
-         # --ask-for-approval never turns that denial into a prompt. The abort\n\
-         # hook and the MCP server both call loopback. Command-sandbox\n\
-         # allowlisting is Phase 2 (INV-DEPLOY-1).\n\
-         [sandbox_workspace_write]\n\
-         network_access = true\n",
+         \n",
         toml_basic(worktree),
     )
 }
@@ -147,7 +141,7 @@ hooks = true\n\
 command = \"sh\"\n\
 args = [\"-c\", \"exec node \\\"$SURGE_PLUGIN_DIR/mcp/server.mjs\\\"\"]\n\
 required = true\n\
-default_tools_approval_mode = \"auto\"\n\
+default_tools_approval_mode = \"approve\"\n\
 env_vars = [\"SURGE_PLUGIN_DIR\", \"SURGE_API\", \"SURGE_RUN_ID\", \"SURGE_RUNTIME_TOKEN\", \"SURGE_ISSUE_ID\"]\n";
 
 fn insert(

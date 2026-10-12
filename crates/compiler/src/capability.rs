@@ -39,10 +39,11 @@ pub fn capability_report(nodes: &[Node], library: &LibraryIndex) -> CapabilityRe
         shell_first: shell.iter().take(3).cloned().collect(),
         writes,
         network,
-        // The egress allowlist is a project setting that lands in phase 2;
-        // until then the default is the closed one, stated rather than hidden
-        // (INV-DEPLOY-1).
-        egress: "empty — all egress refused (loopback to Surge always allowed)".into(),
+        // The current Codex worker enables network access so its runtime
+        // hooks can reach Surge. No Surge allowlist or network sandbox is
+        // installed; the report must describe that actual posture, not the
+        // intended Phase 2.2 policy (INV-DEPLOY-1).
+        egress: "not enforced — worker network access enabled; no Surge egress allowlist (loopback to Surge required)".into(),
     }
 }
 

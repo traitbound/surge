@@ -1,0 +1,65 @@
+{
+  "baseline_commit": "210b2114a4b10bad7236431864724ce78eb02434",
+  "tracked_diff_sha256": "946ec4bc84da5ebdcee0b4a3889b18847e04d9bf5ff6210b0140482da6c5a115",
+  "note": "Working tree tested, including uncommitted capability-report changes; tracked diff hash excludes untracked roadmap files and this report.",
+  "codex_version": "0.160.0",
+  "command": [
+    "codex",
+    "exec",
+    "--sandbox",
+    "workspace-write",
+    "--ask-for-approval",
+    "never",
+    "-"
+  ],
+  "fixture_intervention": "After failed dispatch, SQL UPDATE materialization SET fresh=0 in the disposable DB exercised browser refusal. This does not prove graph-edit invalidation.",
+  "runs": [
+    {
+      "id": "run_cd878dc48e5f",
+      "status": "failed",
+      "started_at": 1791790899448,
+      "ended_at": 1791790899551,
+      "cost": 0.0
+    },
+    {
+      "id": "run_cf5818d51e13",
+      "status": "refused",
+      "started_at": 1791791048038,
+      "ended_at": 1791791048038,
+      "cost": 0.0
+    }
+  ],
+  "issues": [
+    {
+      "id": "iss_fixture_prj_disposable-acceptance",
+      "status": "failed",
+      "lease_owner": null,
+      "lease_run_id": null,
+      "lease_expires_at": null,
+      "retry_count": 0
+    }
+  ],
+  "runtime_token_lifecycle": [
+    {
+      "kind": "runtime",
+      "run_id": "run_cd878dc48e5f",
+      "revoked_at": 1791790899551,
+      "expires_at": null
+    }
+  ],
+  "spans": [
+    {
+      "run_id": "run_cd878dc48e5f",
+      "role": "coordinator",
+      "status": "error",
+      "body": "worker exited with 2 \u2014 stderr tail: error: unexpected argument '--ask-for-approval' found\n\n  tip: to pass '--ask-for-approval' as a value, use '-- --ask-for-approval'\n\nUsage: codex exec [OPTIONS] [PROMPT]\n       codex exec [OPTIONS] <COMMAND> [ARGS]\n\nFor more information, try '--help'."
+    },
+    {
+      "run_id": "run_cf5818d51e13",
+      "role": "coordinator",
+      "status": "refused",
+      "body": "dispatch refused \u2014 no fresh materialization; compile first (INV-ID-1)"
+    }
+  ],
+  "worktrees": "worktree /private/tmp/surge-acceptance-20261012-lragtw3k/repo\nHEAD 6446d525f2badcf7f137f1b01f16db63d1aff973\nbranch refs/heads/main\n\n"
+}

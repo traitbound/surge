@@ -1,6 +1,6 @@
 # Surge — Architecture
 
-C4 container level. This diagram and the "Architecture (prose)" section of [`spec.md`](spec.md) are dual representations of the same intent and must agree exactly.
+C4 container level — target architecture, not a claim every component exists. Current phase ownership is in [the roadmap](../phases/README.md). This diagram and the "Architecture (prose)" section of [`spec.md`](spec.md) are dual representations of the same intent and must agree exactly.
 
 ## Container diagram
 
@@ -21,9 +21,9 @@ graph TB
     end
 
     browser["React UI in browser<br/>React Flow canvas — projection of API state"]
-    runtime["IDE runtimes<br/>Claude Code · Cursor · Codex<br/>(runtime token)"]
+    runtime["IDE runtimes<br/>Codex primary · other adapters deferred<br/>(runtime token)"]
     repo[("Bound workplace repos<br/>surge.yaml · .codex/* · .agents/skills/*<br/>AGENTS.md · declared docs<br/>work_orders/* · .gitignore surge block")]
-    tracker["External trackers<br/>Linear · GitHub · built-in"]
+    tracker["External trackers<br/>GitHub mirror · built-in Plan (Linear deferred)"]
     stategit[("surge-state.git<br/>operator-configured backup remote")]
 
     operator --> browser
@@ -66,13 +66,13 @@ Everything stateful lives in one embedded SQLite database inside one Rust proces
 - *Postgres with pgvector/AGE* — a second process for a single-user loopback tool; violates INV-DEPLOY-1.
 - *SQLite plus a derived recall/graph store* — two transaction boundaries; the divergence it permits is exactly what INV-DATA-8 forbids.
 
-**Why:** at single-operator scale the twelve-entity graph is hundreds of rows, not millions — the pipeline DAG, doc chains, span trees and taskgraph waves are shallow, mostly append-only structures that recursive CTEs traverse in microseconds without hand-maintained closure tables (the 2026-08-18 ADR's stated fear, retracted on inspection: pinned versions and immutable published revisions keep the graphs from ever needing incremental closure maintenance). What SQLite uniquely restores is compile-time query checking on the correctness-critical paths — `sqlx` verifies every query against the schema at build time, which is the guarantee ADR-1 chose Rust for — and the most battle-tested storage engine available sitting under the audit log, hashes and lease state. The two features that tipped the SurrealDB decision substitute cheaply: `LIVE SELECT` → a `tokio::sync::broadcast` fired inside the same repository function that commits the transaction (a span still streams because it was *committed* — the discipline holds because every write already goes through `crates/store`); in-engine HNSW → `sqlite-vec` when semantic recall actually lands.
+**Why:** at single-operator scale the twelve-entity graph is hundreds of rows, not millions — the pipeline DAG, doc chains, span trees and taskgraph waves are shallow, mostly append-only structures that recursive CTEs are suitable for the expected shallow graphs (performance must be measured) without hand-maintained closure tables (the 2026-08-18 ADR's stated fear, retracted on inspection: pinned versions and immutable published revisions keep the graphs from ever needing incremental closure maintenance). What SQLite uniquely restores is compile-time query checking on the correctness-critical paths — `sqlx` verifies every query against the schema at build time, which is the guarantee ADR-1 chose Rust for — and the most battle-tested storage engine available sitting under the audit log, hashes and lease state. The two features that tipped the SurrealDB decision substitute cheaply: `LIVE SELECT` → a `tokio::sync::broadcast` fired inside the same repository function that commits the transaction (a span still streams because it was *committed* — the discipline holds because every write already goes through `crates/store`); in-engine HNSW → `sqlite-vec` when semantic recall actually lands.
 
 **Consequences — accepted, with mitigations:**
 - **Graph traversal is SQL.** Recursive CTEs live behind typed repository functions like every other query, compile-checked like every other query. If profiling ever demands a closure table, it is a derived index rebuilt inside the same transaction as its source rows — never a second source of truth (INV-DATA-8).
 - **The event bus is hand-rolled again** (ADR-3 amended). Commit-then-broadcast inside the repository function; the failure mode of a forgotten broadcast is a stale UI, not corrupt data, and each repo-function test asserts its emission alongside its rows.
 - **Write concurrency is single-writer.** WAL gives concurrent readers; writes serialize on one connection. At one operator plus a handful of heartbeating workers this is far below contention range; `busy_timeout` covers the rest.
-- **Offline query metadata is a build artefact.** The committed `.sqlx/` directory must be regenerated when the schema changes; CI-less Phase 0 enforces it by convention, a `cargo sqlx prepare --check` hook when CI lands.
+- **Offline query metadata is a build artefact.** The committed `.sqlx/` directory must be regenerated when the schema changes; CI-less Phase 0 enforces it by convention, offline build/tests in 0.1 CI, plus a schema-metadata check against a temporary migrated dev database when schema changes.
 
 ### ADR-3 — SSE for realtime, not WebSockets
 **Decision:** server→UI streaming (spans, heartbeats, toasts) over `axum::response::sse`, sourced from `tokio::sync::broadcast` channels fired by the repository layer at commit. *(2026-08-25: source amended from SurrealDB `LIVE SELECT` alongside the ADR-2 reversal.)*
@@ -80,8 +80,8 @@ Everything stateful lives in one embedded SQLite database inside one Rust proces
 **Why:** the Observatory only needs one-directional push; SSE reconnects for free and keeps the API surface plain HTTP. The commit-then-broadcast call lives inside the typed repository function that performs the write, so a span is streamed because it was *committed*, not because a caller remembered to publish it — the property previously delegated to `LIVE SELECT`, now guaranteed by the same `crates/store` discipline that owns every query.
 
 
-### ADR-4 — Single static binary, UI embedded
-**Decision:** `rust-embed` bundles the built Vite output; `cargo build` yields one binary, no Node at runtime.
+### ADR-4 — One service binary, UI and integration assets embedded
+**Decision:** `rust-embed` bundles the built Vite output; `cargo build` yields the service binary. The UI needs no Node server; the emitted MCP command runs `node`, so Node.js remains a worker integration prerequisite alongside Codex, git and hook utilities. *(2026-10-12: distinguish embedded assets from an embedded interpreter; no static-linking guarantee is claimed by this plan.)*
 **Alternatives rejected:** separate UI dev-server in production (two processes, port juggling); Electron/Tauri shell (the browser is already the shell).
 **Why:** "one local service on one port" is the product frame; distribution and upgrade become copying one file.
 
@@ -103,7 +103,7 @@ Everything stateful lives in one embedded SQLite database inside one Rust proces
 ### ADR-8 — Claude Code plugin over MCP as the runtime integration
 **Decision:** the primary runtime integration is an MCP server (`integrations/claude-plugin/`) that exposes the runtime-token capabilities as typed tools, plus the span/guard hooks. As of 2026-10-09 Codex is the host: compiled `.codex/config.toml` registers the server and `.codex/hooks.json` registers the hooks (design §23-Twenty-Three). The 2026-08-12 decision registered the same server from `.claude/settings.json` for Claude Code. Raw hook-script HTTP glue remains the fallback for MCP-less runtimes.
 **Alternatives rejected:** hook-scripts-only (shell glue, no typed contract, fragile across runtime versions — kept only as fallback); forking or wrapping the runtime binary (maintenance treadmill, breaks "runtimes are thin clients").
-**Why:** Claude Code speaks MCP natively, so the riskiest Phase 0 assumption (hooks can implement fetch/spans/abort-poll) gets a supported protocol instead of curl; and one MCP server is the reusable template for the post-V3 Cursor/Codex adapters. (design §23-Eighteen)
+**Why:** Claude Code speaks MCP natively, so the riskiest Phase 0 assumption (hooks can implement fetch/spans/abort-poll) gets a supported protocol instead of curl; and one MCP server is the reusable template for deferred runtime adapters. (design §23-Eighteen)
 
 *2026-08-25 — packaging settled (smoke re-walk NEW-1):* the plugin tree is embedded in the binary via `rust-embed` alongside the UI and extracted to `<db-dir>/.surge/plugin/<version>` at boot, so ADR-4's one-file distribution covers the actuator too and `SURGE_PLUGIN_DIR` resolves regardless of the operator's cwd. `--plugin-dir` overrides it for development. The supervisor verifies the tree's MCP entry point before every spawn and refuses loudly if it is absent: a worker without tools or hooks emits no spans, never heartbeats and cannot see an abort, yet `claude -p` still exits 0 — so an unverified spawn would report success with nothing behind it.
 
@@ -111,3 +111,11 @@ Everything stateful lives in one embedded SQLite database inside one Rust proces
 **Decision:** the schema lives as SQL migrations in `crates/store`, embedded in the binary via `sqlx::migrate!` and applied at process start; sqlx's migrations table is the schema-version stamp. No external migration tool. *(2026-08-25: restated from SurrealQL `SCHEMAFULL` definitions alongside the ADR-2 reversal — the principle is unchanged, only the dialect.)*
 **Alternatives rejected:** a standalone migration CLI (a second tool in the boot path of a single-binary product); schemaless/JSON-blob tables (an unenforced object model is how INV-* rules rot into comments).
 **Why:** ADR-4 says the product is one file you copy — so schema application belongs inside it, at boot, not in a separate step an operator can forget. Typed columns, foreign keys and CHECK constraints keep the twelve entities enforced at the engine rather than by convention, which is what makes `crates/domain` the single source of truth that `ts-rs` projects into TypeScript.
+
+### ADR-10 — Prove one executable graph before broad surfaces (2026-10-12)
+
+**Decision:** validate Codex in 0.1, durable authoring in 1.1, then supported sequential graph execution in 1.2 before library expansion, parallel scheduling or full pages. Execution freezes revision/materialization, validates supported nodes/edges and attributes attempts. Per-run cost gates precede automated retry; wave budgets follow in 2.2.
+
+**Why:** deterministic hashing/emission does not itself implement edge scheduling. The central product bet needs an observed Agent → Stage → retry example, not just a richer editor.
+
+**Consequences:** repo I/O and full Ops land in 2.1, queue/SSE/runtime policy in 2.2, wave git assembly in 2.3, tracker mirror in 3.4. Blocks retain current semantic hash inputs; unsupported execution refuses until expansion is proven. The current egress report describes network access as enabled and not enforced. Provider configuration is grounded on Codex, never inferred from Claude environment conventions.

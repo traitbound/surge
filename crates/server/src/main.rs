@@ -17,6 +17,10 @@ struct Args {
     /// point it at `integrations/claude-plugin/` to run a working tree.
     #[arg(long)]
     plugin_dir: Option<PathBuf>,
+    /// Operator Codex auth cache, copied into a private ephemeral worker home.
+    /// Never stored in the bound repo, compiled files, or database.
+    #[arg(long)]
+    codex_auth_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -41,7 +45,8 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("worker plugin: {}", plugin_dir.display());
     // `plugin_dir` is an argument, not a defaultable field: a plausible wrong
     // value there is the NEW-1 P0 (smoke walk 3, N14).
-    let supervisor = surge_server::supervisor::SupervisorConfig::new(plugin_dir);
+    let mut supervisor = surge_server::supervisor::SupervisorConfig::new(plugin_dir);
+    supervisor.codex_auth_file = args.codex_auth_file;
     let state = AppState::with_supervisor(pool, supervisor);
 
     // Nothing survives a process boundary as `running`: whatever the previous
