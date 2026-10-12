@@ -19,7 +19,7 @@ change; make exactly that change.
   what the work order asks.
 - **Leave the repo consistent.** Code, tests and docs that the change makes
   stale move together in your commits on the task branch. Never touch
-  `surge.yaml` or the compiled `.claude/` files — those belong to Surge's
+  `surge.yaml` or the compiled `.codex/` and `.agents/skills/` files — those belong to Surge's
   closed write path (INV-DATA-1).
 - **Verify before you finish.** Run the project's build and tests; a change
   you have not seen pass is not done.

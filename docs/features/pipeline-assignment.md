@@ -1,9 +1,9 @@
 # Feature: pipeline-assignment
 
-**Status:** draft
+**Status:** draft — amended 2026-10-12, review required
 **Phase:** phase-1.1
 **Owner:** solo
-**Last updated:** 2026-08-29
+**Last updated:** 2026-10-12
 
 > **Spec depth note (2026-08-29).** This spec deliberately states *contracts* — acceptance criteria, wire shapes, invariants touched, seams — and not *mechanism*. It prescribes no store-function signatures, no SQL shapes, no module layout and no migration recipe. Those are settled against the compiler and the schema by the implementer, under the fresh-reviewer gate. Earlier drafts in this epic prescribed mechanism in prose and were wrong about it three times.
 
@@ -19,7 +19,7 @@ But this feature **does** add `Stale`, because it is this feature that makes `St
 
 An operator assigns a published pipeline version to a project, from the CLI or the API. The card then shows `name · vN` instead of "not assigned", the switcher shows `vN`, and the compile dialog opens pre-filled with that pipeline rather than a hardcoded fixture id. Compiling without naming a pipeline compiles the assigned one.
 
-Assigning a pipeline the project was not already compiled against stales its materialization — the graph it runs has moved since its last compile — so the card returns to "not compiled" and dispatch is refused until recompile. Where a fresh materialization was nonetheless built from a different pipeline than the one assigned, the project says so rather than implying they match.
+Assigning a pipeline the project was not already compiled against stales its materialization — the graph it runs has moved since its last compile — so the card returns to "stale" and dispatch is refused until recompile. Where a fresh materialization was nonetheless built from a different pipeline than the one assigned, the project says so rather than implying they match.
 
 Assigning something that does not exist is refused by name, recorded, and leaves the previous assignment standing.
 
@@ -45,22 +45,22 @@ Only the decisions an implementer should not have to re-derive. Mechanism is the
 
 **Assignment does not gate dispatch.** The supervisor decides on freshness alone, and this feature does not change that. AC 4's staling therefore forces a recompile; it does not guarantee the running graph is the assigned one. That is why AC 6 exists — the honest response to a divergence the system permits is to name it, not to claim it cannot happen.
 
-**Badge slot is not this feature's.** `registry.tsx`'s badge is a binary ternary already carrying a known precedence defect assigned to `project-overview` (1.3). This feature adds no contender to it: the assignment/compile mismatch of AC 6 is named in the project's **pipeline line**, beside `name · vN`, not in the badge.
+**Badge slot is not this feature's.** `registry.tsx`'s badge is a binary ternary already carrying a known precedence defect assigned to `project-overview` (3.1). This feature adds no contender to it: the assignment/compile mismatch of AC 6 is named in the project's **pipeline line**, beside `name · vN`, not in the badge.
 
 ## Artefact verdicts
 
 - Sequence diagram: **skip** — two actors, synchronous, one service, no async coordination or compensation.
 - Component design: **include** — the three-facts decision and the staling predicate are the two things a reasonable implementer would get wrong, and one earlier draft did.
-- User flow: **skip** — no new UI surface. Three existing sites change, enumerated below; their state design belongs to `project-overview` (1.3).
+- User flow: **skip** — no new UI surface. Three existing sites change, enumerated below; their state design belongs to `project-overview` (3.1).
 
 ## Non-goals
 
-- The assign **picker dialog** and the pipelines page — 1.3. Operator access here is the CLI and the API.
+- The assign **picker dialog** and the pipelines page — 3.1. Operator access here is the CLI and the API.
 - Project-local revisions, forking, promote-to-fork, history, diff.
 - ~~Making `Stale` producible~~ — **retracted.** AC 4's staling makes it producible here, so this feature owns the variant rather than leaving a badge that says "not compiled" about a project that has compiled. §23-Twenty-Two and `crates/domain/src/project.rs:38-48` both anticipated this trigger and named `pipeline-revisions` as the expected owner; the trigger arrived one spec earlier.
 - Refusing an explicit-id compile that differs from the assignment. Trying a pipeline before assigning it is a real capability; AC 6 makes the result visible rather than illegal.
 - Making assignment gate dispatch.
-- Resolving the badge-slot precedence (`project-overview`, 1.3).
+- Resolving the badge-slot precedence (`project-overview`, 3.1).
 - Any change to `pipeline_content_hash` or where it lives.
 
 ## Touches
@@ -103,7 +103,7 @@ The `"{thing} — {reason}"` shape is a *refusal* convention; the success row us
 
 | Field | Rust type | JSON / TS | Notes |
 |---|---|---|---|
-| `Project.assigned_pipeline` | `Option<…>` | `… \| null` | `null` **is** the unassigned state — the reason no enum variant is added |
+| `Project.assigned_pipeline` | `Option<…>` | `… \| null` | `null` **is** the unassigned state — the reason no Unassigned variant is added |
 | `Project.compiled_from` | `Option<…>` | `… \| null` | new; `null` when no fresh materialization exists |
 | `…​.version` | `i64` | `bigint` (ts-rs) | serde emits a JSON number; the `bigint` is type-level only (`ui/src/api.ts:87-89`). Feeds no hash |
 | `…​.content_hash` | `String` | `string` | opaque, equality only; a real computed hash since ESC-1 |
@@ -114,12 +114,12 @@ The `"{thing} — {reason}"` shape is a *refusal* convention; the success row us
 ## Depends on
 
 - `domain-model`, `store-layer`, `cli-thin` (phase-0).
-- ESC-3 (`1eb48dc`) — the derived-status read path this extends without adding a variant.
-- ESC-1 (`3ecd585`) — `content_hash` is real, so what AC 1 and AC 7 surface means something.
+- ESC-3 (`1eb48dc`) — the derived-status read path this extends with a reachable Stale variant.
+- ESC-1 (`3ecd585`) — fresh inserts derive a real hash. Existing databases are not repaired by its seed guard; this feature's first prerequisite slice repairs placeholder metadata before enabling AC 1/AC 7 hash-bearing reads.
 - ESC-2 (`271ccdc`) — the refusal-record shape AC 3 and AC 5 follow.
-- **Nothing in phase-1.** `canvas-editor` also lists `GET /api/pipelines`; see the seam note below.
+- **Internal ordering:** assignment-owned identity repair → hash-bearing pipeline/project reads → assignment/compile targeting → revisions → canvas. Do not wait for the full revision entity to repair identity, and do not ship these reads against legacy placeholders.
 
-**Seam with `canvas-editor`:** that spec (currently a stale draft) claims the same list endpoint and a pipeline API module. **This feature owns `GET /api/pipelines`**, because it needs it first and `canvas-editor` is not written yet; `canvas-editor` consumes it and owns the graph read/write routes beside it. Its rewrite must record that.
+**Seam with revisions and canvas:** assignment owns `GET /api/pipelines` and its hash-bearing read model. `pipeline-revisions` owns the project-graph read/mutation endpoint and generated DTOs, including revision acknowledgement, base-revision conflict handling and atomic audit/freshness. `canvas-editor` consumes those contracts; it owns no competing graph write or save route.
 
 ## Approach
 
@@ -133,7 +133,7 @@ A sketch, not a plan. The taskgraph decomposes it.
 6. `surge assign` subcommand, matching the existing CLI shape.
 7. UI: drop the fixture fallback in the compile dialog; render the mismatch on the pipeline line; unify the unassigned string; handle the new `Stale` badge value.
 
-**Compile dialog empty state:** dropping `FIXTURE_PIPELINE_ID` leaves an unassigned project's dialog opening empty with its submit disabled, and this feature ships no picker (1.3). That is the intended state — an unassigned project has nothing to compile — but it must *say* so rather than presenting a dead form. The dialog should name the missing assignment and point at `surge assign`.
+**Compile dialog empty state:** dropping `FIXTURE_PIPELINE_ID` leaves an unassigned project's dialog opening empty with its submit disabled, and this feature ships no picker (3.1). That is the intended state — an unassigned project has nothing to compile — but it must *say* so rather than presenting a dead form. The dialog should name the missing assignment and point at `surge assign`.
 
 ## Grounded claims
 
@@ -185,11 +185,11 @@ Reachable via `surge assign`, `surge compile` (target now optional), `GET /api/p
 - `surge assign` a pipeline id that does not exist; refused by name, an audit row records it, previous assignment stands.
 - `GET /api/pipelines` lists both seeded pipelines, and neither `content_hash` is `sha256:fixture-two-node-v1`.
 
-**Walk preconditions.** *Pipeline ids* are discoverable only by calling `GET /api/pipelines` directly — this feature ships no client for it (no CLI subcommand, no `api.ts` entry), so the walker uses curl with the session token from `~/.config/surge/token`. That is an accepted walk technique, stated here so it is not discovered mid-walk. *Dispatch hooks* additionally need an eligible issue: create one via the Registry's fixture-issue button or `surge dispatch`. And: a `surge.db` created before ESC-1 carries the old placeholder `content_hash`; the seed's `exists()` guard skips it. Delete the dev DB before walking. This discharges the `phase.md` known-defects row whose trigger — "a phase-1.1 feature reads the column" — AC 1 and AC 7 now meet; the row is annotated in the same change as this spec.
+**Walk preconditions.** Discover pipeline ids through `GET /api/pipelines` using the existing session-token flow; this feature does not require the full pipelines page. Dispatch needs an eligible fixture issue. Prefer an isolated disposable walk database. Existing operator databases may contain the old placeholder `content_hash`; preserve them. The first assignment slice must provide a versioned identity-repair/migration path before its reads depend on those values, preserving recorded runs and auditing repair. Deleting an operator database is not a migration or acceptance requirement.
 
 ## Open questions
 
-1. **Where should `pipeline_content_hash` live?** ~~Deferred deliberately~~ — **answered 2026-08-29 by ESC-4**: it lives in `surge-domain` (`surge_domain::pipeline_content_hash`), and `insert_graph` derives the hash rather than accepting one. This feature still adds no hash writer; it reads `content_hash` through a join, and that column is now guaranteed to be the hash of its own graph. See `phase.md` → "Decided 2026-08-29 (ESC-4)".
+1. **Where should `pipeline_content_hash` live?** ~~Deferred deliberately~~ — **answered 2026-08-29 by ESC-4**: it lives in `surge-domain` (`surge_domain::pipeline_content_hash`), and `insert_graph` derives the hash rather than accepting one. No semantic hash algorithm or graph mutation changes are added here; the prerequisite repair corrects legacy placeholder metadata before `content_hash` is surfaced through read joins. See `phase.md` → "Decided 2026-08-29 (ESC-4)".
 2. **Should the second seeded fixture be blessed?** `blessed` has no writer, and `promote-to-fork` asserts a blessed base. Seeding one blessed would give that spec an exercisable base at no cost here. Proposed yes; confirm when `promote-to-fork` is written.
 3. **Does an unassigned project with a non-null `compiled_from` count as a mismatch?** Reachable today and pinned green by `compile_endpoint.rs:139-143`. Proposed: no — with nothing assigned there is nothing to diverge from; the pipeline line simply names what was compiled.
 
@@ -205,11 +205,21 @@ Raised here rather than decided; each binds more than this feature.
 ## Out of scope
 
 - Revisions, forking, blessing writes, history, diff.
-- The assign picker and pipelines page (1.3).
-- The badge-slot precedence defect (1.3).
+- The assign picker and pipelines page (3.1).
+- The badge-slot precedence defect (3.1).
 - Multi-project or cross-project assignment.
 - Any migration on the `project` table; ESC-3's parked column stays parked.
 
 ## Notes
 
 Two earlier drafts of this spec failed in instructive ways. The first added an `Unassigned` status variant that would have made the badge contradict the supervisor. The second prescribed a store-function signature that would not compile, a join that could duplicate rows, and smoke hooks needing a second pipeline that does not exist. The third — this one — states contracts and leaves mechanism to implementation, which is what the template asked for in the first place.
+
+## Replan alignment — 2026-10-12
+
+This feature remains in 1.1. Revisions and promote-to-fork are separate features; the combined `pipeline-versioning` draft is superseded. Full assignment picker/overview is 3.1. Presentation persistence does not stale materialization; assignment and semantic revision writes do. Draft/readiness status does not establish shipped functionality.
+
+## Identity repair prerequisite
+
+Before exposing AC 1/AC 7 hash-bearing reads, repair pre-ESC-1 placeholder hash metadata from the exact persisted nodes/edges. The correction preserves pipeline id, graph content, pins and published version; records old/new metadata and the repair version in audit/provenance; and never rewrites existing run/materialization hashes. This is the narrowly dated metadata-repair exception in INV-DATA-3, not an editable published graph.
+
+An upgrade test starts with a populated pre-ESC-1 database containing a placeholder pipeline hash plus project, run and audit history. After the versioned repair, list/project reads expose the computed graph hash, retained rows/hashes are unchanged, and a second boot does not duplicate repair/audit. A disposable fresh database cannot establish this upgrade result.

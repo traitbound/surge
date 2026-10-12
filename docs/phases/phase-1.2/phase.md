@@ -1,76 +1,61 @@
-# Phase 1.2 — Library, trust and compile governance
+# Phase 1.2 — One graph-driven Codex run
 
 **Status:** not_started
-**Parent:** [phase-1](../phase-1/phase.md) · **Epic 2 of 3** · depends on 1.1
-**Commitment level:** Phase 1 — ships to the operator.
-**Time horizon:** ~1.5 weeks
+**Replanned:** 2026-10-12
+**Depends on:** [phase-1.1](../phase-1.1/phase.md)
+**Estimate:** unestimated; size the next slice against its acceptance evidence before assigning dates.
 
 ## Purpose
 
-Make the library real and the compile boundary honest: **nothing compiles that has not been reviewed, and the capability report tells the truth about what the graph will be allowed to do.** Trust is an enforcement boundary (INV-AUTH-3), not a presentation concern — which is why it is separated from the pages in 1.3.
+Prove the central product claim on one bounded executable graph: an implementer node runs, a deterministic verification stage observes its output, and graph edges determine completion or a bounded retry. A content hash alone is not an execution engine.
 
 ## In scope
 
-1. **Library**: Hooks · Subagents · Skills tabs, immutable-per-version publish flow, drafts (INV-DATA-2).
-2. **Trust flow**: imports land untrusted, red banner, Mark reviewed, compile hard-block naming untrusted items (INV-AUTH-3). Every step audit-logged.
-3. **Compile dialog** with the four-line capability report (writes · shell · network · egress) and signature line (design §04).
-4. **Upgrade review dialog** for bumping pinned library versions (design §23-Two). It *launches from* 1.3's composition table, but the dialog and its affected-node computation are here, because the versioning semantics belong with the library.
-5. **Default library, full set**: the normative seven hooks · six subagents · seven skills backing the doc chain (design §03/§10), authored and published through the library surfaces this epic builds — on the Phase 0 seed.
-
-## Out of scope
-
-- Pipelines page, project overview, canvas modes, blocks → 1.3
-- Egress allowlist *editor* → Phase 3 (the egress *data* exists here for the capability report)
-- Everything in the parent's whole-phase Out of scope
+1. Validate an executable graph and freeze its revision/materialization at dispatch. Start with one Agent plus one Stage and explicit passed/failed/retry edges; reject unsupported executable combinations by name, including unimplemented Block expansion.
+2. Supervisor executes nodes from the frozen graph; stage commands execute in the same task worktree and verify the produced output. The real worker fetches the authoritative work order from a pointer plus hashes.
+3. Run-to-node attribution, node-id validation, timings, stage exit codes and attempt records. Control flow uses observed process/stage results, never worker-written pass spans.
+4. Required gates, bounded sequential retries, per-run metering/cap and abort checks between nodes. For retry edges persist an explicit limit, with no more than three retries; exceeding the limit terminates visibly. Unmeterable dispatch/run pauses behind an explicit human override gate, never silently costs zero.
+5. Close the known refusal-record holes, millisecond refusal-id collision and audit-subject inconsistency before adding retry traffic.
 
 ## Done when
 
-- Importing a skill marks it untrusted; compile of a referencing pipeline is refused **naming the untrusted item**; Mark reviewed unblocks; every step writes an audit row.
-- Bumping a pinned library version runs the upgrade review dialog (diff + affected nodes) and produces a new pipeline version.
-- The capability report lines match the graph: adding a stage node changes the shell line; granting WebSearch changes the network line.
-- Publishing an item at vN+1 leaves vN byte-identical and still resolvable by anything pinned to it (INV-DATA-2).
-- The full 7·6·7 default set is published through these surfaces — not seeded past them — and a pipeline referencing every item compiles.
-
-*Each line names an exercisable surface, per the phase-0 pattern rows.*
-
-## Architecture (this epic)
-
-Superset of 1.1: the browser grows library tabs, the trust banner and two dialogs; the compiler grows the capability-report computation. Still no pages, no canvas modes.
-
-```mermaid
-graph TB
-    operator([Operator - single user])
-
-    subgraph binary["Surge binary — Rust · 127.0.0.1:7420"]
-        api["Axum HTTP API<br/>human-token & runtime-token routes"]
-        db[("SQLite — embedded, single file<br/>entities · runs/spans · audit<br/>+ pipeline versions · library items & trust state")]
-        compiler["Materialization compiler<br/>pipeline × project → files<br/>INV-ID-2 hash · capability report<br/>· untrusted-item hard block (INV-AUTH-3)"]
-        supervisor["Runtime supervisor (single-task)"]
-        ui_assets["Embedded React UI"]
-    end
-
-    browser["React UI in browser<br/>canvas + round-trip (1.1)<br/>+ library tabs · trust banner<br/>+ compile dialog · upgrade review"]
-    repo[("Bound workplace repo")]
-
-    operator --> browser
-    browser -->|"human token"| api
-    ui_assets --> browser
-    api --> db
-    compiler --> db
-    compiler -->|"writes compiled files"| repo
-    supervisor --> db
-```
+- On a real Codex run, modifying the verification command changes the observed result and selected edge; moving a node does not. Hash traceability and execution fidelity are both demonstrated.
+- An injected verification failure follows the declared retry edge, reruns the implementer and stops at the persisted retry cap. A forged worker pass span cannot unlock verification.
+- Unknown endpoints, invalid block membership, unsupported executable kinds, cycles outside bounded retry edges and missing/invalid stage configuration refuse visibly before spawning.
+- Every executed node and attempt has a recorded node id, duration and outcome tied to the immutable run snapshot. Unknown or cross-run node ids are rejected.
+- Editing the project mid-run stales future dispatch but never changes the active snapshot. Locked gates, abort and unmeterable cost halt the correct next node and require a recorded human action to proceed.
 
 ## Anticipated specs
 
-| Feature | Hint |
+| Feature | Contract |
 |---|---|
-| library-store | items, drafts, publish vN+1, pinning, immutability |
-| trust-and-import | untrusted state, review flow, compile hard-block naming the item |
-| compile-dialog | capability report computation + signature line |
-| upgrade-review | pinned-version bump dialog, affected-node list |
-| default-library | the normative 7·6·7 item set backing the doc chain, authored on the Phase 0 seed |
+| graph-execution-contract | Supported graph validation and immutable snapshot |
+| node-execution | Agent then deterministic stage, authoritative fetch |
+| node-attribution | Run/node/attempt identity and timing |
+| sequential-control | Required gates, bounded retry, abort and per-run cap |
+| refusal-integrity | Known refusal holes, identifiers and audit subjects |
 
-## Scoping assumptions
+## Out of scope
 
-- verify at spec time: the Phase 0 capability-report computation (`crates/compiler/src/capability.rs`) can be extended to the four-line form without the per-line `enforced`/`declared` egress tiering, which the code map marks P2. If it cannot, the egress line ships *declared-only* and says so on its face — it must not imply enforcement that does not exist (INV-DEPLOY-1's 2026-08-26 correction is the precedent).
+Parallel waves, taskgraph generation, tracker mirrors, automatic provider fallback, general Block execution and fanout. Existing six-kind authoring does not imply six-kind execution support.
+
+## Architecture
+
+Existing containers gain a minimal graph executor inside the supervisor and stage execution in its task worktree. Polling remains sufficient; no queue, mirror or SSE is required.
+
+```mermaid
+graph LR
+    operator[Operator] --> ui[Embedded React UI / CLI]
+    ui --> api[Axum human API]
+    api --> db[(Embedded SQLite)]
+    api --> compiler[Materialization compiler]
+    compiler --> repo[Bound repo / isolated worktree]
+    api --> supervisor[Codex supervisor]
+    supervisor --> worker[Codex worker]
+    worker --> runtime[Scoped runtime API]
+    runtime --> db
+```
+
+## Acceptance evidence
+
+Local suites are regression evidence. Acceptance additionally needs a dated walk recording the commit, runtime version where relevant, observable rows/files/git objects, adverse cases, and any explicitly accepted exception. No phase closes from a spec status or passing mock-worker test alone.

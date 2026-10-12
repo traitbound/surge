@@ -1,0 +1,39 @@
+# Phase 0.1 real Codex follow-up — 2026-10-12
+
+**Verdict: LOCAL GO, with a browser-navigation exception and hosted CI deferred at the operator's request.** This continues the [investigation checkpoint](investigation-2026-10-12.md) and supersedes its list of pending runtime walks. The original [NO-GO walk](smoke-2026-10-12.md) remains the record of the earlier CLI startup failure.
+
+## Source and environment
+
+- Real runtime: `codex-cli 0.160.0`, Node.js, git and the installed shell/curl hook utilities. The fixture is `/tmp/surge-acceptance-20261012-lragtw3k`, with project `prj_disposable-acceptance` and disposable Git repo `repo`. The listener command was checked before each server switch; only that server was stopped. The normal embedded plugin was restored after the failing-MCP case.
+- The real runs used working-tree source based on `210b2114a4b10bad7236431864724ce78eb02434`. The reviewed source and evidence were committed on task branch `codex/phase-0-1-runtime` as `73b2b13146d3` before the final clean-checkout checks. Review fixes added after the paid runtime walks are covered by local regressions; no claim that those paid runs executed the later commit is made.
+- The operator explicitly supplied the existing cached Codex login through `--codex-auth-file`. The source credential stayed outside the fixture and repo. The supervisor created owner-only temporary homes, then removed them when the worker exited or was killed. No token or login contents are retained in committed evidence.
+
+## Reviewed fixes and local verification
+
+The auth-home guard now belongs to the run monitor, so early worker stderr closure cannot delete a live worker's login, and a descendant holding stderr open cannot retain it after worker exit. Both regressions failed before the fix and passed afterward. A document run now snapshots declared file **contents after** Surge rematerializes its runtime, rejects symlinks and Surge-owned paths, and requires changed content from the worker. An unchanged file with a new timestamp and a symlink to compiler-owned `AGENTS.md` both reproduced false success before the fix; they now fail. Token mint and all document preparation failures enter the same terminal cleanup path; a mint-failure regression also failed before the change and passed afterward.
+
+Independent read-only review then found two more cleanup paths. Both audit-write failure tests failed before the fix and now pass: a spawned worker is stopped, its run terminalized, its runtime token revoked, and a work-order lease and worktree cleared. A boot-reconciliation test also failed before the fix and now passes: a stale isolated Codex home is deleted, while a locked home owned by another live server is preserved. The lock is held through the run monitor and released on process death. Follow-up review caught the older, lock-free home layout; boot now removes an auth-bearing home with that exact legacy layout too. These crash-recovery fixes were not part of the paid runtime walks above.
+
+A fresh local clone of task commit `73b2b13146d3` passed `npm ci --prefix ui`, `npm run build --prefix ui`, `SQLX_OFFLINE=true cargo build --locked --workspace`, and `SQLX_OFFLINE=true cargo test --locked --workspace` (zero failures; two normally ignored checks). The installed Codex CLI parser check and the macOS task-sandbox check were then run explicitly and passed. `git diff --cached --check` passed before the commit. An earlier synthetic source snapshot gave the same Rust/UI result but is not the acceptance checkout. Repository-wide `cargo fmt --check` already fails on 361 pre-existing locations, as recorded in the handoff; this work does not reformat unrelated code. Hosted CI has not been observed, at the operator's explicit request to ignore it for now.
+
+## Real runtime results
+
+| Case | Observed result |
+| --- | --- |
+| Work order commit | Earlier `run_aceede6f2539` succeeded with scoped fetch/span/heartbeat and hook tool spans. Commit `d2cf567756f3065149ccfe3545894b104115e3a2` contains `acceptance.txt` with `verified`; disposable main remained `6446d525f2badcf7f137f1b01f16db63d1aff973`. |
+| Timed abort | Earlier `run_db575aa3d5e7` was aborted after readiness, released its lease, left the forbidden file absent, and refused runtime-token replay with HTTP 401. |
+| Document output | `run_98160ef50d3f` succeeded and wrote the declared `docs/summary.md` (2,918 bytes; SHA-256 in [sanitized results](evidence/2026-10-12/followup-results.json)). The file has the four sections required by the compiled `write-summary` skill, cites existing fixture paths and runtime commands, and was not committed. Disposable main stayed at the same commit and the run token was revoked. Worker spans show direct Surge MCP calls, Pre/Post tool hook spans, and progress through the compiled doc-writer and skill instructions. This proves the instructions were read and applied; the run did not invoke a separate named Codex subagent. |
+| Silent lease expiry | `run_e844aeaffeb4` appended a readiness span. The exact worker PID was suspended, then **only this disposable issue's** lease deadline was accelerated from `1791797186199` to `1791796585573` ms. The run failed, lease cleared, token replay returned HTTP 401, temporary auth home disappeared, and the forbidden file was absent. This is an accelerated expiry test, not a ten-minute wall-clock wait. |
+| Required MCP startup failure | With a disposable plugin copy whose `mcp/server.mjs` exited immediately, `run_eae0bad6c37c` failed in under one second. Its coordinator error says `required MCP servers failed to initialize: surge`. Lease and token drained and no forbidden output appeared. The normal plugin was restored afterward. |
+
+The [sanitized results](evidence/2026-10-12/followup-results.json) retain identifiers and outcomes without credentials. Raw database, temporary auth and fixture-only scripts remain outside the repository.
+
+## Browser walk and exceptions
+
+The in-app browser showed the original claim/bind/compile/dispatch loop, stale-materialization refusal, truthful network report (`not enforced`; worker network enabled), and `cost n/m` in the [initial walk](smoke-2026-10-12.md). This follow-up showed the Observatory list with successful work-order and document runs, an aborted run, silent-expiry and MCP failures, the older refusal, and `cost n/m` on each. Expanding the successful document displayed Surge MCP calls, hook-generated tool spans and the worker's survey/draft/write progress. Expanding the MCP failure displayed the required-server error. A later attempt to expand the lease row was rejected by the browser tool's automatic approval review with HTTP 429, so its browser detail view is not claimed; the list showed `FAILED` and the persisted run/lease/token records were checked separately.
+
+On task commit `73b2b13146d3`, a fresh disposable instance showed the Claim screen. Visiting its one-time claim URL reported `net::ERR_BLOCKED_BY_CLIENT` to browser automation, but reloading `/` displayed the authenticated Registry; a subsequent token replay returned HTTP 410. This reconfirms claim/session behavior while leaving seamless navigation as a narrow browser-client exception. The earlier authenticated bind/compile/dispatch walk remains the operator-loop evidence. Browser views do not prove token revocation, committed bytes or output authorship by themselves; the fixture checks above supply those facts.
+
+## Deferred check and scope of verdict
+
+This LOCAL GO accepts the real-Codex and browser smoke with the stated client-navigation exception. The operator explicitly deferred hosted CI; its absence is recorded and is not presented as a passing result. The branch has not been merged, and the earlier paid runs remain evidence from working-tree source before the review fixes. No Phase 1.1 feature work is claimed by this acceptance.

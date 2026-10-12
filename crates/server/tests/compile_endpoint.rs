@@ -74,7 +74,7 @@ async fn compile_writes_files_and_records_materialization() {
     assert_eq!(body["capability_report"]["writes"][0], "docs/summary.md");
 
     // Files landed in the bound repo; gitignore block maintained (INV-DATA-7).
-    assert!(repo.path().join(".claude/agents/implementer.md").is_file());
+    assert!(repo.path().join(".codex/agents/implementer.toml").is_file());
     assert!(repo.path().join("surge.yaml").is_file());
     let gi = std::fs::read_to_string(repo.path().join(".gitignore")).unwrap();
     assert_eq!(gi.matches("surge-managed").count(), 2); // start + end markers
@@ -161,7 +161,8 @@ async fn untrusted_import_hard_blocks_compile() {
     // Nothing materialized, nothing written (hard block).
     assert!(surge_store::materializations::fresh_for_project(&state.pool, "prj_fix")
         .await.unwrap().is_none());
-    assert!(!repo.path().join(".claude").exists());
+    assert!(!repo.path().join(".codex").exists());
+    assert!(!repo.path().join(".agents").exists());
 
     let actions: Vec<String> = surge_store::audit::recent(&state.pool, 10).await.unwrap()
         .into_iter().map(|e| e.action).collect();

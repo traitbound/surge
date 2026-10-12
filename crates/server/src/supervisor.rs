@@ -25,20 +25,22 @@ use surge_domain::observatory::{Run, RunKind, RunStatus, Span, SpanRole, SpanSta
 
 #[derive(Clone)]
 pub struct SupervisorConfig {
-    /// Worker command. The work order is delivered on the worker's STDIN,
-    /// never as a positional argument — Claude Code's `--mcp-config` is
-    /// variadic and swallows a following positional (smoke 2026-08-25, F2).
-    /// Default is the real thing; tests substitute a script (INV-EXEC-1 cares
-    /// who spawns, not what).
+    /// Worker command. The prompt is delivered on STDIN. Codex reads it when
+    /// the command ends in `-` (`codex exec -`). Tests substitute a script
+    /// (INV-EXEC-1 cares who spawns, not what).
     pub worker_cmd: Vec<String>,
+    /// Optional operator-provided Codex login cache, outside bound repos.
+    pub codex_auth_file: Option<PathBuf>,
     /// §06: TTL 10 minutes.
     pub lease_ttl_ms: i64,
     /// Parent directory for per-lease worktrees (never inside a bound repo).
     pub work_dir: PathBuf,
     /// Injected as SURGE_API so hooks/tools can reach Surge (INV-DEPLOY-1 exemption).
     pub api_base: String,
-    /// Where the Claude Code plugin lives; injected as SURGE_PLUGIN_DIR — the
-    /// compiled .claude/mcp.json and settings.json hooks resolve against it.
+    /// Where the runtime plugin lives; injected as SURGE_PLUGIN_DIR. The
+    /// compiled `.codex/config.toml` and hooks resolve against it. The
+    /// directory name is still `claude-plugin`: the MCP server and hook
+    /// scripts are host-agnostic, and Codex is what spawns them.
     /// It has no default: see [`SupervisorConfig::new`].
     pub plugin_dir: PathBuf,
     /// How often the watchdog looks at the lease clock and the child.
@@ -67,11 +69,16 @@ impl SupervisorConfig {
     pub fn new(plugin_dir: PathBuf) -> Self {
         Self {
             worker_cmd: vec![
-                "claude".into(),
-                "-p".into(),
-                "--mcp-config".into(),
-                ".claude/mcp.json".into(),
+                "codex".into(),
+                "--ask-for-approval".into(),
+                "never".into(),
+                // Compile gates the library's hooks; both dispatch paths
+                // rematerialize those vetted definitions immediately first.
+                "--dangerously-bypass-hook-trust".into(),
+                "exec".into(),
+                "-".into(),
             ],
+            codex_auth_file: None,
             lease_ttl_ms: 10 * 60 * 1000,
             work_dir: PathBuf::from("surge-worktrees"),
             api_base: format!("http://{}", crate::BIND),
@@ -442,19 +449,7 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
     // failure past the lease claim must not leak the lease, the running run,
     // the credential, or the worktree (smoke 2026-08-25, F4; smoke walk 3, N1).
     let prepared: anyhow::Result<String> = async {
-        let (pipeline, nodes, edges) =
-            surge_store::pipelines::load_graph(&state.pool, &mat.pipeline_id).await?;
-        let mut library = surge_compiler::LibraryIndex::new();
-        for (kind, r) in surge_compiler::referenced_items(&nodes) {
-            if let Some(item) =
-                surge_store::library::get(&state.pool, kind, &r.name, r.version).await?
-            {
-                library.insert((kind, r.name.clone(), r.version), item);
-            }
-        }
-        let compiled = surge_compiler::compile(&pipeline, &nodes, &edges, &library, &project)
-            .map_err(|r| anyhow::anyhow!("compile into worktree failed: {r}"))?;
-        surge_compiler::write_to_repo(&worktree, &compiled)?;
+        materialize_vetted_runtime(state, &project, &mat, &worktree).await?;
         let wo_rel = format!("work_orders/{}.md", issue.id);
         let wo_abs = worktree.join(&wo_rel);
         std::fs::create_dir_all(wo_abs.parent().unwrap())?;
@@ -531,7 +526,7 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
         ("SURGE_ISSUE_ID", issue.id.as_str()),
         ("SURGE_RUNTIME_TOKEN", runtime_token.as_str()),
     ]);
-    let (child, stderr_tail) = match spawned {
+    let (child, stderr_tail, codex_home) = match spawned {
         Ok(cs) => cs,
         Err(e) => {
             unwind_dispatch(
@@ -549,8 +544,12 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
         }
     };
 
-    surge_store::audit::record(&state.pool, "run.dispatched", &run_id, "human", Some(&project.id), now)
-        .await?;
+    if let Err(e) = surge_store::audit::record(&state.pool, "run.dispatched", &run_id, "human", Some(&project.id), now).await {
+        stop_unmonitored_worker(child, codex_home).await;
+        unwind_dispatch(state, Unwind::Failed, &run_id, &project.id, Some(&issue.id),
+            Some(guard), Some(&runtime_token), &format!("run dispatch audit failed: {e}")).await;
+        return Err(e.into());
+    }
 
     tokio::spawn(monitor(
         state.clone(),
@@ -559,7 +558,9 @@ pub async fn dispatch_issue(state: &AppState, issue_id: &str) -> anyhow::Result<
         Some(issue.id.clone()),
         child,
         stderr_tail,
+        codex_home,
         Some(guard),
+        Vec::new(),
     ));
     Ok(DispatchOutcome::Spawned { run_id })
 }
@@ -624,6 +625,135 @@ async fn unobserved(state: &AppState, run_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Recreate trusted runtime definitions from the approved graph/library,
+/// never grant headless hook trust to an edited on-disk hook file.
+async fn materialize_vetted_runtime(
+    state: &AppState,
+    project: &surge_domain::project::Project,
+    mat: &surge_domain::materialization::Materialization,
+    directory: &std::path::Path,
+) -> anyhow::Result<()> {
+    let (pipeline, nodes, edges) =
+        surge_store::pipelines::load_graph(&state.pool, &mat.pipeline_id).await?;
+    let mut library = surge_compiler::LibraryIndex::new();
+    for (kind, r) in surge_compiler::referenced_items(&nodes) {
+        if let Some(item) =
+        surge_store::library::get(&state.pool, kind, &r.name, r.version).await?
+        {
+        library.insert((kind, r.name.clone(), r.version), item);
+        }
+    }
+    let compiled = surge_compiler::compile(&pipeline, &nodes, &edges, &library, &project)
+        .map_err(|r| anyhow::anyhow!("compile into worktree failed: {r}"))?;
+    anyhow::ensure!(compiled.materialization_hash == mat.content_hash, "materialization changed; compile again before dispatch");
+    surge_compiler::write_to_repo(directory, &compiled)?;
+    Ok(())
+
+}
+
+/// Isolated Codex home for this worktree. Trust for the project path lives
+/// here, outside the bound repo (INV-DATA-1) and outside `~/.codex`.
+struct CodexHome {
+    path: PathBuf,
+    _owner_lock: std::fs::File,
+    _directory: tempfile::TempDir,
+}
+
+async fn stop_unmonitored_worker(mut child: tokio::process::Child, codex_home: CodexHome) {
+    let _ = child.kill().await;
+    drop(codex_home);
+}
+
+fn write_codex_home(cfg: &SupervisorConfig, worktree: &std::path::Path, allow_git: bool) -> anyhow::Result<CodexHome> {
+    // Codex resolves symlinks before looking up project trust. An absolute
+    // alias (notably /tmp on macOS) silently disables all project config.
+    let worktree = std::fs::canonicalize(worktree)?;
+    let parent = absolutize(&cfg.work_dir)?.join("codex-home");
+    std::fs::create_dir_all(&parent)?;
+    let directory = tempfile::Builder::new().prefix("surge-worker-").tempdir_in(parent)?;
+    let home = directory.path().to_path_buf();
+    // A second server may share work_dir. Its boot cleanup must not erase a
+    // home still owned by this process; a crashed process releases this lock.
+    let owner_lock = std::fs::File::create(home.join(".owner.lock"))?;
+    owner_lock.lock()?;
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let mut config = String::from("default_permissions = \"surge\"\n");
+    config.push_str(&surge_compiler::codex_trust_config(&worktree.to_string_lossy()));
+    config.push_str("\n[permissions.surge]\nextends = \":read-only\"\n[permissions.surge.network]\nenabled = true\n[permissions.surge.filesystem]\n");
+    let mut writable = vec![worktree.clone()];
+    if allow_git {
+        let repo = worktree.to_str().ok_or_else(|| anyhow::anyhow!("non-UTF8 worktree path"))?;
+        let git_dir = PathBuf::from(git_stdout(repo, &["rev-parse", "--absolute-git-dir"])?).canonicalize()?;
+        let common = PathBuf::from(git_stdout(repo, &["rev-parse", "--path-format=absolute", "--git-common-dir"])?).canonicalize()?;
+        anyhow::ensure!(git_dir != common, "work-order worker requires a separate git worktree");
+        let branch = git_stdout(repo, &["symbolic-ref", "HEAD"])?;
+        anyhow::ensure!(branch.starts_with("refs/heads/") && branch != "refs/heads/main", "worker requires a task branch");
+        writable.extend([git_dir, common.join("objects")]);
+        for path in [common.join(&branch), common.join("logs").join(&branch)] {
+            writable.push(PathBuf::from(format!("{}.lock", path.display())));
+            writable.push(path);
+        }
+    }
+    for path in writable {
+        config.push_str(&format!("{} = \"write\"\n", serde_json::to_string(&path.to_string_lossy())?));
+    }
+    std::fs::write(home.join("config.toml"), config)?;
+    if let Some(source) = &cfg.codex_auth_file {
+        use std::io::Write;
+        let contents = std::fs::read(source)
+            .map_err(|_| anyhow::anyhow!("cannot read configured Codex auth file"))?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)] {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(home.join("auth.json"))?.write_all(&contents)?;
+    }
+    Ok(CodexHome { path: home, _owner_lock: owner_lock, _directory: directory })
+}
+
+fn reap_orphan_codex_homes(cfg: &SupervisorConfig) -> anyhow::Result<()> {
+    let parent = absolutize(&cfg.work_dir)?.join("codex-home");
+    if !parent.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(parent)? {
+        let entry = entry?;
+        if !entry.file_name().to_string_lossy().starts_with("surge-worker-")
+            || !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let lock_path = entry.path().join(".owner.lock");
+        match lock_path.symlink_metadata() {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Homes from the pre-lock runtime have this exact layout. A
+                // fresh server owns none of their runs; remove credential
+                // copies left by an older crash during the upgrade.
+                let legacy_file = |name: &str| entry.path().join(name).symlink_metadata()
+                    .is_ok_and(|m| m.file_type().is_file());
+                if legacy_file("config.toml") && legacy_file("auth.json") {
+                    std::fs::remove_dir_all(entry.path())?;
+                }
+                continue;
+            }
+            Ok(m) if m.file_type().is_file() => {},
+            Ok(_) => continue,
+            Err(e) => return Err(e.into()),
+        }
+        let lock = std::fs::OpenOptions::new().read(true).write(true).open(&lock_path)?;
+        match lock.try_lock() {
+            Ok(()) => std::fs::remove_dir_all(entry.path())?,
+            Err(std::fs::TryLockError::WouldBlock) => {},
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
 /// Spawn a worker: prompt on stdin, stderr tailed into a channel so a failed
 /// worker's actual error is a visible record, not a discarded pipe
 /// (smoke 2026-08-25, F4; INV-ERR-1).
@@ -632,17 +762,19 @@ fn spawn_worker(
     dir: &std::path::Path,
     prompt: &str,
     extra_env: &[(&str, &str)],
-) -> anyhow::Result<(tokio::process::Child, StderrTail)> {
+) -> anyhow::Result<(tokio::process::Child, StderrTail, CodexHome)> {
     let plugin_dir = absolutize(&cfg.plugin_dir)?;
     // Fail loud, never spawn blind: without a real plugin tree the worker
     // gets no MCP tools and no hooks, so it cannot append spans, heartbeat,
-    // or see an abort — and `claude -p` exits 0 regardless (NEW-1).
+    // or see an abort — and a headless worker can still exit 0 (NEW-1).
     crate::plugin_assets::verify(&plugin_dir)?;
+    let codex_home = write_codex_home(cfg, dir, extra_env.iter().any(|(k, _)| *k == "SURGE_ISSUE_ID"))?;
     let mut cmd = tokio::process::Command::new(&cfg.worker_cmd[0]);
     cmd.args(&cfg.worker_cmd[1..])
         .current_dir(dir)
         .env("SURGE_API", &cfg.api_base)
         .env("SURGE_PLUGIN_DIR", &plugin_dir)
+        .env("CODEX_HOME", &codex_home.path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -680,7 +812,7 @@ fn spawn_worker(
     } else {
         let _ = tx.send(String::new());
     }
-    Ok((child, rx))
+    Ok((child, rx, codex_home))
 }
 
 /// The cleanup owed after a dispatch stops past the run row: run terminalized
@@ -881,6 +1013,52 @@ fn git_stdout(repo: &str, args: &[&str]) -> anyhow::Result<String> {
 /// silence past TTL → kill, reclaim, fail (§06-03). Abort is NOT enforced by
 /// killing — it lands at the worker's next status poll (§06-06); the lease
 /// clock is the backstop.
+struct DocOutput {
+    path: PathBuf,
+    before_contents: Option<Vec<u8>>,
+}
+
+impl DocOutput {
+    fn snapshot(path: PathBuf) -> anyhow::Result<Self> {
+        let before_contents = match std::fs::symlink_metadata(&path) {
+            Ok(meta) => {
+                anyhow::ensure!(meta.is_file(), "declared doc output is not a regular file: {path:?}");
+                Some(std::fs::read(&path)?)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        Ok(Self { path, before_contents })
+    }
+
+    fn was_written(&self) -> bool {
+        std::fs::symlink_metadata(&self.path).ok().filter(|m| m.is_file())
+            .and_then(|_| std::fs::read(&self.path).ok())
+            .is_some_and(|contents| Some(contents) != self.before_contents)
+    }
+}
+
+fn declared_doc_path(repo: &std::path::Path, output_path: &str) -> anyhow::Result<PathBuf> {
+    let relative = std::path::Path::new(output_path);
+    anyhow::ensure!(!output_path.is_empty() && relative.components().all(|c| matches!(c, std::path::Component::Normal(_))), "invalid declared doc output path");
+    let first = relative.components().next().unwrap().as_os_str();
+    anyhow::ensure!(first != ".codex" && first != ".agents" && first != ".git" && first != "work_orders"
+        && output_path != "AGENTS.md" && output_path != "surge.yaml" && output_path != ".gitignore",
+        "declared doc output overlaps Surge-owned files");
+    // Existing symlinks anywhere in the path could turn a declared document
+    // into an unrelated file (including a compiler-owned one).
+    let mut path = std::fs::canonicalize(repo)?;
+    for component in relative.components() {
+        path.push(component);
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) => anyhow::ensure!(!meta.file_type().is_symlink(), "declared doc output traverses a symlink"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(path)
+}
+
 async fn monitor(
     state: AppState,
     run_id: String,
@@ -888,7 +1066,9 @@ async fn monitor(
     issue_id: Option<String>,
     mut child: tokio::process::Child,
     stderr_tail: StderrTail,
+    _codex_home: CodexHome,
     worktree: Option<WorktreeGuard>,
+    doc_outputs: Vec<DocOutput>,
 ) {
     let poll = std::time::Duration::from_millis(state.supervisor.poll_ms);
     let (status, reason): (RunStatus, Option<String>) = loop {
@@ -972,7 +1152,7 @@ async fn monitor(
             RunStatus::Failed,
             Some(
                 "worker exited 0 but appended no spans and never heartbeated — it could not \
-                 reach Surge (check plugin registration in the compiled .claude/)"
+                 reach Surge (check plugin registration in the compiled .codex/)"
                     .to_string(),
             ),
         ),
@@ -989,6 +1169,10 @@ async fn monitor(
                 )
             )
         }
+        (RunStatus::Succeeded, None) if doc_outputs.iter().any(|o| !o.was_written()) => (
+            RunStatus::Failed,
+            Some("worker exited 0 without writing every declared doc output; the document run is not complete".into()),
+        ),
         (s, _) => (s, reason),
     };
     // If an abort already landed, it stands (finish_run_if_running is guarded).
@@ -1122,38 +1306,53 @@ pub async fn dispatch_doc_run(
         cost: 0.0,
     };
     surge_store::observatory::insert_run(&state.pool, &run).await?;
-    let runtime_token = surge_store::tokens::mint_for_run(
-        &state.pool,
-        surge_store::tokens::TokenKind::Runtime,
-        Some(&project.id),
-        Some(&run_id),
-        now,
-    )
-    .await?;
     let cfg = &state.supervisor;
-    // Scoped to the doc node, deliberately. "Run the doc pipeline compiled
-    // into .claude/" pointed the worker at a directory that carries EVERY
-    // node kind's agents — the compiled tree is the whole materialization,
-    // not a per-run subset — so the worker also attempted the agent node,
-    // found no work order behind it, and self-reported a refusal. The
-    // Observatory then rendered a green `succeeded` run containing a red
-    // `refused` row (smoke walk 5, F6). A doc run has no issue and no lease
-    // (design §23-Fourteen); its whole job is the declared doc.
-    let prompt = "Run ONLY the doc node of the pipeline compiled into .claude/ for this project: \
-                  produce the docs it declares, in this repo, and stop. The compiled .claude/ \
-                  also carries the agents for work-order nodes — those belong to leased issues, \
-                  not to this run; do not attempt them. Use the surge MCP tools as you work: \
-                  surge_append_span for progress, surge_poll_run to check for aborts.\n";
-    // The run row exists and the credential is minted, so a spawn failure
-    // owes the same cleanup a work-order dispatch owes — issue-less variant.
-    // Propagating with `?` here leaked a permanently `running` run, a live
-    // runtime token and no `dispatch.failed` entry (smoke walk 3, N1).
-    let (child, stderr_tail) = match spawn_worker(
-        cfg,
-        std::path::Path::new(&project.repo_path),
-        prompt,
-        &[("SURGE_RUN_ID", run_id.as_str()), ("SURGE_RUNTIME_TOKEN", runtime_token.as_str())],
-    ) {
+    // Scoped to the doc node, deliberately. Pointing the worker at the whole
+    // compiled tree made it attempt the agent node as well, find no work
+    // order, and self-report a refusal. The Observatory then rendered a
+    // green `succeeded` run containing a red `refused` row (smoke walk 5, F6).
+    // A doc run has no issue and no lease (design §23-Fourteen); its whole
+    // job is the declared doc.
+    // Everything after the run insertion belongs to one cleanup boundary.
+    // In particular, token mint, graph loading and output validation may all
+    // fail before there is a child to monitor.
+    let mut runtime_token = None;
+    let prepared = async {
+        runtime_token = Some(surge_store::tokens::mint_for_run(
+            &state.pool,
+            surge_store::tokens::TokenKind::Runtime,
+            Some(&project.id),
+            Some(&run_id),
+            now,
+        ).await.map_err(|e| anyhow::anyhow!("runtime token mint failed: {e}"))?);
+        let (_, nodes, _) = surge_store::pipelines::load_graph(&state.pool, &mat.pipeline_id).await?;
+        let mut paths = Vec::new();
+        let mut declared = Vec::new();
+        for node in &nodes {
+            if let surge_domain::pipeline::NodeConfig::Doc { output_path, subagent, skill } = &node.config {
+                paths.push(declared_doc_path(std::path::Path::new(&project.repo_path), output_path)?);
+                declared.push(format!("- {}: read .codex/agents/{}.toml and .agents/skills/{}/SKILL.md, then write this declared output.", output_path, subagent.name, skill.name));
+            }
+        }
+        anyhow::ensure!(!paths.is_empty(), "pipeline has no declared doc outputs");
+        materialize_vetted_runtime(state, &project, &mat, std::path::Path::new(&project.repo_path)).await?;
+        // Baseline after Surge's own compile, so only worker changes count.
+        let doc_outputs = paths.into_iter().map(DocOutput::snapshot).collect::<anyhow::Result<Vec<_>>>()?;
+        let prompt = format!("Run ONLY the doc node of the pipeline compiled into .codex/ and .agents/skills/ \
+                      for this project: produce the docs it declares, in this repo, and stop. The \
+                      compiled tree also carries the agents for work-order nodes — those belong to \
+                      leased issues, not to this run; do not attempt them. Use the surge MCP tools \
+                      as you work: surge_append_span for progress, surge_poll_run to check for aborts. \
+                      Do not commit; the operator commits doc output.\nDeclared doc outputs:\n{}\n", declared.join("\n"));
+        let spawned = spawn_worker(
+            cfg,
+            std::path::Path::new(&project.repo_path),
+            &prompt,
+            &[("SURGE_RUN_ID", run_id.as_str()), ("SURGE_RUNTIME_TOKEN", runtime_token.as_deref().unwrap())],
+        ).map_err(|e| anyhow::anyhow!("worker spawn failed: {e}"))?;
+        Ok::<_, anyhow::Error>((spawned, doc_outputs))
+    }.await;
+    let ((child, stderr_tail, codex_home), doc_outputs) = match prepared {
         Ok(cs) => cs,
         Err(e) => {
             unwind_dispatch(
@@ -1163,15 +1362,19 @@ pub async fn dispatch_doc_run(
                 &project.id,
                 None,
                 None,
-                Some(&runtime_token),
-                &format!("worker spawn failed: {e}"),
+                runtime_token.as_deref(),
+                &e.to_string(),
             )
             .await;
             return Err(e);
         }
     };
-    surge_store::audit::record(&state.pool, "run.dispatched", &run_id, "human", Some(&project.id), now)
-        .await?;
+    if let Err(e) = surge_store::audit::record(&state.pool, "run.dispatched", &run_id, "human", Some(&project.id), now).await {
+        stop_unmonitored_worker(child, codex_home).await;
+        unwind_dispatch(state, Unwind::Failed, &run_id, &project.id, None, None,
+            runtime_token.as_deref(), &format!("run dispatch audit failed: {e}")).await;
+        return Err(e.into());
+    }
     tokio::spawn(monitor(
         state.clone(),
         run_id.clone(),
@@ -1179,7 +1382,9 @@ pub async fn dispatch_doc_run(
         None,
         child,
         stderr_tail,
+        codex_home,
         None,
+        doc_outputs,
     ));
     Ok(DispatchOutcome::Spawned { run_id })
 }
@@ -1312,6 +1517,7 @@ async fn terminalize_all_running(state: &AppState, reason: &str) -> anyhow::Resu
 /// Takes [`AppState`] rather than the pool alone: identifying a worktree
 /// needs the supervisor's `work_dir`, and the reap needs the project's repo.
 pub async fn reconcile_orphans(state: &AppState) -> anyhow::Result<usize> {
+    reap_orphan_codex_homes(&state.supervisor)?;
     terminalize_all_running(
         state,
         "supervisor restarted while this run was in flight — the worker it was watching is \
@@ -1455,4 +1661,95 @@ pub fn spawn_lease_sweeper(state: AppState) -> tokio::task::JoinHandle<()> {
             sweep_expired_tokens(&state).await;
         }
     })
+}
+
+#[cfg(test)]
+mod codex_home_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires installed Codex and macOS sandbox; no model request"]
+    #[cfg(target_os = "macos")]
+    fn task_sandbox_can_commit_but_cannot_write_main() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        let wt = root.path().join("task");
+        std::fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(&repo)
+                .args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        git(&["-c", "user.name=test", "-c", "user.email=test@example.invalid",
+              "commit", "--allow-empty", "-qm", "seed"]);
+        git(&["worktree", "add", "-b", "task/probe", wt.to_str().unwrap()]);
+        let mut cfg = SupervisorConfig::new(root.path().into());
+        cfg.work_dir = root.path().join("workers");
+        let home = write_codex_home(&cfg, &wt, true).unwrap();
+        std::fs::write(wt.join("proof.txt"), "verified\n").unwrap();
+        let sandbox = |args: &[&str]| std::process::Command::new("codex")
+            .env("CODEX_HOME", &home.path).arg("sandbox")
+            .args(["--permission-profile", "surge", "-C"]).arg(&wt)
+            .arg("--").args(args).current_dir(&wt).output().unwrap();
+        let out = sandbox(&["git", "add", "proof.txt"]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let out = sandbox(&["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+                            "commit", "-m", "proof"]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let out = sandbox(&["git", "update-ref", "refs/heads/main", "HEAD"]);
+        assert!(!out.status.success(), "task sandbox modified main");
+        let out = std::process::Command::new("git").arg("-C").arg(&repo)
+            .args(["show", "task/probe:proof.txt"]).output().unwrap();
+        assert_eq!(out.stdout, b"verified\n");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn trust_uses_the_canonical_project_path() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("real-repo");
+        std::fs::create_dir(&repo).unwrap();
+        let alias = root.path().join("alias");
+        std::os::unix::fs::symlink(&repo, &alias).unwrap();
+        let mut cfg = SupervisorConfig::new(root.path().into());
+        cfg.work_dir = root.path().join("workers");
+        let home = write_codex_home(&cfg, &alias, false).unwrap();
+        let config = std::fs::read_to_string(home.path.join("config.toml")).unwrap();
+        let expected = surge_compiler::codex_trust_config(&repo.canonicalize().unwrap().to_string_lossy());
+        assert!(config.contains(&expected), "{config}");
+    }
+
+    #[test]
+    fn isolated_home_uses_explicit_credentials_and_erases_them_on_drop() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("repo")).unwrap();
+        let source = root.path().join("operator-auth.json");
+        std::fs::write(&source, "test credential fixture").unwrap();
+        let mut cfg = SupervisorConfig::new(root.path().join("plugin"));
+        cfg.work_dir = root.path().join("workers");
+        cfg.codex_auth_file = Some(source.clone());
+        let home = write_codex_home(&cfg, &root.path().join("repo"), false).unwrap();
+        let path = home.path.clone();
+        assert_eq!(std::fs::read_to_string(path.join("auth.json")).unwrap(), "test credential fixture");
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(std::fs::metadata(path.join("auth.json")).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        drop(home);
+        assert!(!path.join("auth.json").exists());
+        assert_eq!(std::fs::read_to_string(source).unwrap(), "test credential fixture");
+    }
+
+    #[test]
+    fn missing_explicit_auth_file_fails_before_spawn() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("repo")).unwrap();
+        let mut cfg = SupervisorConfig::new(root.path().into());
+        cfg.work_dir = root.path().join("workers");
+        cfg.codex_auth_file = Some(root.path().join("missing"));
+        assert!(write_codex_home(&cfg, &root.path().join("repo"), false).is_err());
+    }
 }

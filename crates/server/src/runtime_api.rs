@@ -264,7 +264,7 @@ fn bound_run(identity: &Identity) -> Option<&str> {
 }
 
 /// Capability 1: fetch work order / lease / materialization hash — what a
-/// session needs at start (the compiled `.claude/` files on disk are the
+/// session needs at start (the compiled `.codex/` files on disk are the
 /// pipeline itself; this carries the rest). A run-bound token may fetch for
 /// the issue its own run was dispatched for, and no other.
 async fn fetch_work_order(

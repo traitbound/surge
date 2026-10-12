@@ -120,7 +120,7 @@ async fn bind_create_then_compile_prints_the_capability_report() {
     }
     assert!(text.contains("sha256:"), "missing materialization hash: {text}");
     assert!(text.contains("cache key:"), "missing cache key: {text}");
-    assert!(repo.path().join(".claude").is_dir(), "compile must write .claude/");
+    assert!(repo.path().join(".codex").is_dir(), "compile must write .codex/");
 
     // Compiling an unknown pipeline is a refusal: reason + nonzero exit.
     let out = surge(&base, cfg.path(), &["compile", "demo", "pl_nope"]);

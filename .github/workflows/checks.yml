@@ -1,0 +1,34 @@
+name: Baseline checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install Rust
+        run: rustup toolchain install 1.98.0 --profile minimal --no-self-update
+      - name: Generate model types
+        run: cargo +1.98.0 test --locked -p surge-domain
+      - name: Install UI dependencies
+        run: npm ci --prefix ui
+      - name: Build UI before embedding
+        run: npm run build --prefix ui
+      - name: Build service
+        run: cargo +1.98.0 build --locked --workspace
+      - name: Rust tests
+        run: cargo +1.98.0 test --locked --workspace

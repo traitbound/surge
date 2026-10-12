@@ -16,7 +16,7 @@ pub fn render_work_order(issue: &Issue) -> String {
          Complete the task described by this issue on its task branch, and commit your\n\
          work there — a work order that leaves no commit on its branch is recorded as\n\
          failed, because Surge cannot see that anything was produced. The compiled\n\
-         `.claude/` files in this worktree are the pipeline; follow them.\n",
+         `.codex/` files, `.agents/skills/`, and `AGENTS.md` in this worktree are the pipeline; follow them.\n",
         title = issue.title,
         id = issue.id,
         project = issue.project_id,

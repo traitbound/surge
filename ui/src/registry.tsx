@@ -26,7 +26,7 @@ function CapabilityReportDialog({
     <>
       <h2>Materialization compiled</h2>
       <p className="sub">
-        Capability report — accepting it is the approval of what this pipeline can do.
+        Declared pipeline capabilities. Worker tool and network restrictions are not enforced by this report.
       </p>
       <div className="cap-report">
         <div className="cap-line">
@@ -43,7 +43,7 @@ function CapabilityReportDialog({
           </span>
         </div>
         <div className="cap-line">
-          <span className="key">Network</span>
+          <span className="key">Network (declared)</span>
           <span className="val">{report.network.length ? report.network.join(", ") : "none"}</span>
         </div>
         <div className="cap-line">

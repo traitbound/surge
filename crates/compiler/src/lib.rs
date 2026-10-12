@@ -16,7 +16,7 @@ pub mod work_order;
 mod write;
 
 pub use capability::capability_report;
-pub use emit::surge_yaml_base;
+pub use emit::{codex_trust_config, surge_yaml_base};
 pub use hash::materialization_hash;
 pub use write::write_to_repo;
 

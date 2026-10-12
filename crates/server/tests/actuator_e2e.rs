@@ -23,6 +23,10 @@ struct Env {
 /// Bound git repo + fixture graph + trusted library + fresh materialization +
 /// one eligible issue, with a live server on an ephemeral loopback port.
 async fn setup(worker_script: &str) -> Env {
+    setup_with_server(worker_script, true).await
+}
+
+async fn setup_with_server(worker_script: &str, serve_http: bool) -> Env {
     let pool = surge_store::open_in_memory().await.unwrap();
     let repo = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
@@ -47,13 +51,18 @@ async fn setup(worker_script: &str) -> Env {
             String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     }
 
-    // Worker: a script standing in for `claude -p` (the supervisor cares
+    // Worker: a script standing in for `codex exec` (the supervisor cares
     // about spawn/exit/lease mechanics, not what the worker thinks).
     let script = work.path().join("worker.sh");
     std::fs::write(&script, worker_script).unwrap();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let api_base = format!("http://{}", listener.local_addr().unwrap());
+    let listener = if serve_http {
+        Some(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap())
+    } else {
+        None
+    };
+    let api_base = listener.as_ref().map(|l| format!("http://{}", l.local_addr().unwrap()))
+        .unwrap_or_else(|| "http://127.0.0.1:1".into());
     // A real extracted plugin tree: spawning verifies it (NEW-1), and it is a
     // constructor argument because the field has no default (N14) — there is
     // no `Default` to spread from, only `new`.
@@ -71,8 +80,10 @@ async fn setup(worker_script: &str) -> Env {
         ..SupervisorConfig::new(plugin_dir)
     };
     let state = AppState::with_supervisor(pool.clone(), cfg);
-    let router = app(state.clone());
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    if let Some(listener) = listener {
+        let router = app(state.clone());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    }
 
     let session = surge_store::tokens::mint(&pool, TokenKind::Session, None, 1).await.unwrap();
     let project = surge_domain::project::Project {
@@ -243,7 +254,7 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
          echo \"run=$SURGE_RUN_ID tok=${SURGE_RUNTIME_TOKEN%%${SURGE_RUNTIME_TOKEN#rt_}} plugin=$SURGE_PLUGIN_DIR\" > \"$OUT\"\n\
          echo \"$stdin\" | grep -q 'Work order — Fixture task' && echo stdin-workorder >> \"$OUT\"\n\
          echo \"$stdin\" | grep -q 'surge_fetch_work_order' && echo stdin-fetchtool >> \"$OUT\"\n\
-         test -f .claude/settings.json && echo compiled >> \"$OUT\"\n\
+         test -f .codex/config.toml && echo compiled >> \"$OUT\"\n\
          test -f \"work_orders/$SURGE_ISSUE_ID.md\" && echo workorder >> \"$OUT\"\n\
          git rev-parse --abbrev-ref HEAD >> \"$OUT\"\n\
          echo note > note.md\n\
@@ -294,7 +305,7 @@ async fn dispatch_runs_a_worker_in_a_reaped_worktree() {
     assert_eq!(issue.status, surge_domain::board::OrchestrationStatus::Verified);
     assert!(issue.lease.is_none());
     wait_reaped(&worktree_dir(&env)).await; // reaped at lease end (INV-EXEC-2)
-    assert!(!env.repo.path().join(".claude").exists(), "bound repo untouched (INV-DATA-1)");
+    assert!(!env.repo.path().join(".codex").exists(), "bound repo untouched (INV-DATA-1)");
 }
 
 #[tokio::test]
@@ -347,7 +358,7 @@ async fn doc_run_without_fresh_materialization_refuses_with_a_visible_run() {
         && a.subject.contains("compile first")),
         "audited with its reason and its project (INV-ERR-1, N13): {audit:?}");
     // Nothing was spawned: the bound repo is untouched (INV-DATA-1).
-    assert!(!env.repo.path().join(".claude").exists());
+    assert!(!env.repo.path().join(".codex").exists());
 }
 
 /// ESC-2 / INV-ERR-1 + INV-OBS-1: the interactive claim path (INV-AUTH-1's
@@ -607,8 +618,8 @@ async fn worker_stderr_tail_is_a_visible_record() {
 }
 
 /// NEW-1 regression: a plugin dir without its MCP entry point must refuse the
-/// spawn — a worker with no tools and no hooks runs blind, and `claude -p`
-/// exits 0 regardless, which would report `verified` with nothing behind it.
+/// spawn — a worker with no tools and no hooks runs blind, and a headless
+/// worker exits 0 regardless, which would report `verified` with nothing behind it.
 #[tokio::test]
 async fn missing_plugin_tree_refuses_the_spawn() {
     let env = setup("#!/bin/sh\nexit 0\n").await;
@@ -793,6 +804,38 @@ async fn boot_reconcile_terminalizes_orphaned_runs() {
     assert_eq!(
         surge_store::observatory::get_run(&env.state.pool, "run_orphan").await.unwrap().ended_at,
         run.ended_at, "the first verdict stands");
+}
+
+#[tokio::test]
+async fn boot_reconcile_removes_stale_codex_auth_home_but_preserves_locked_home() {
+    let env = setup_with_server("#!/bin/sh\nexit 0\n", false).await;
+    let parent = env.work.path().join("worktrees/codex-home");
+    let stale = parent.join("surge-worker-stale");
+    let legacy = parent.join("surge-worker-legacy");
+    let unrelated = parent.join("surge-worker-unrelated");
+    let live = parent.join("surge-worker-live");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::create_dir_all(&unrelated).unwrap();
+    std::fs::create_dir_all(&live).unwrap();
+    std::fs::write(stale.join("auth.json"), "stale credential").unwrap();
+    std::fs::File::create(stale.join(".owner.lock")).unwrap();
+    std::fs::write(legacy.join("config.toml"), "default_permissions = \"surge\"\n").unwrap();
+    std::fs::write(legacy.join("auth.json"), "legacy credential").unwrap();
+    std::fs::write(unrelated.join("note.txt"), "not a Codex home").unwrap();
+    std::fs::write(live.join("auth.json"), "live credential").unwrap();
+    let lock = std::fs::File::create(live.join(".owner.lock")).unwrap();
+    lock.lock().unwrap();
+
+    assert_eq!(surge_server::supervisor::reconcile_orphans(&env.state).await.unwrap(), 0);
+    assert!(!stale.exists(), "orphaned credential copy removed at boot");
+    assert!(!legacy.exists(), "pre-lock credential copy removed during upgrade");
+    assert!(unrelated.exists(), "unknown directory is left intact");
+    assert!(live.join("auth.json").exists(), "a live owner keeps its home");
+
+    drop(lock);
+    assert_eq!(surge_server::supervisor::reconcile_orphans(&env.state).await.unwrap(), 0);
+    assert!(!live.exists(), "home is removed after its owner exits");
 }
 
 /// N2 regression (sweeper half): TTL enforced with no monitor in existence at
@@ -987,7 +1030,7 @@ async fn a_runtime_token_dies_with_its_run() {
 }
 
 /// F6: a `succeeded` doc run held a `refused` span, because the prompt said
-/// "run the doc pipeline compiled into .claude/" and the compiled tree
+/// "run the doc pipeline compiled into .codex/" and the compiled tree
 /// carries every node kind's agents — so the worker also attempted the agent
 /// node and self-reported a refusal. The Observatory rendered a green run
 /// with a red row in it. The prompt is scoped to the doc node now, and says
@@ -996,7 +1039,7 @@ async fn a_runtime_token_dies_with_its_run() {
 #[tokio::test]
 async fn the_doc_run_prompt_is_scoped_to_the_doc_node() {
     // The worker runs in the bound repo itself; it captures its own prompt.
-    let env = setup("#!/bin/sh\ncat > prompt.txt\nexit 0\n").await;
+    let env = setup("#!/bin/sh\ncat > prompt.txt\nmkdir -p docs\necho summary > docs/summary.md\nexit 0\n").await;
     compile(&env).await;
     let run_id = match surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.unwrap() {
         surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
@@ -1005,6 +1048,7 @@ async fn the_doc_run_prompt_is_scoped_to_the_doc_node() {
     assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Succeeded);
 
     let prompt = std::fs::read_to_string(env.repo.path().join("prompt.txt")).unwrap();
+    assert!(prompt.contains("docs/summary.md"), "the authoritative output path is supplied: {prompt}");
     assert!(prompt.contains("ONLY the doc node"), "scoped to the doc node (F6): {prompt}");
     assert!(prompt.contains("do not attempt"), "the other nodes are named and excluded: {prompt}");
     assert!(!prompt.contains("surge_heartbeat"), "a doc run holds no lease to beat: {prompt}");
@@ -1141,3 +1185,160 @@ async fn an_honest_error_span_with_a_commit_still_verifies() {
     assert_eq!(count, "2", "the work landed as a commit on the task branch");
 }
 
+
+#[tokio::test]
+async fn doc_dispatch_rematerializes_vetted_hooks_before_startup() {
+    let env = setup(&format!("#!/bin/sh\ncat >/dev/null\n{SPAN_CURL}mkdir -p docs\necho summary > docs/summary.md\nexit 0\n")).await;
+    compile(&env).await;
+    let path = env.repo.path().join(".codex/hooks.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "unreviewed replacement").unwrap();
+    let run_id = match surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    let hooks = std::fs::read_to_string(path).unwrap();
+    assert!(hooks.contains("poll-abort.sh"), "unvetted hook was handed to headless worker: {hooks}");
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Succeeded);
+}
+
+#[tokio::test]
+async fn doc_exit_zero_without_declared_output_is_failed() {
+    let env = setup(&format!("#!/bin/sh\ncat >/dev/null\n{SPAN_CURL}exit 0\n")).await;
+    compile(&env).await;
+    let run_id = match surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &run_id).await.unwrap();
+    assert!(spans.iter().any(|s| s.body.as_deref().unwrap_or("").contains("declared doc output")));
+}
+
+#[tokio::test]
+async fn doc_worker_keeps_isolated_home_after_closing_stderr() {
+    let env = setup_with_server("#!/bin/sh\nexec 2>&-\ncat >/dev/null\nsleep 0.3\ntest -f \"$CODEX_HOME/auth.json\" || exit 14\nmkdir -p docs\necho \"$CODEX_HOME\" > docs/summary.md\n", false).await;
+    compile(&env).await;
+    let source = env.work.path().join("operator-auth.json");
+    std::fs::write(&source, "fixture credential").unwrap();
+    let mut cfg = (*env.state.supervisor).clone();
+    cfg.codex_auth_file = Some(source);
+    let state = AppState::with_supervisor(env.state.pool.clone(), cfg);
+    let run_id = match surge_server::supervisor::dispatch_doc_run(&state, "prj_fix").await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Succeeded);
+    let home = std::fs::read_to_string(env.repo.path().join("docs/summary.md")).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::path::Path::new(home.trim()).exists() {
+        assert!(std::time::Instant::now() < deadline, "isolated home survived worker exit");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn descendant_stderr_cannot_keep_isolated_auth_home() {
+    let env = setup_with_server("#!/bin/sh\ncat >/dev/null\nmkdir -p docs\necho \"$CODEX_HOME\" > docs/summary.md\nsleep 3 &\nexit 0\n", false).await;
+    compile(&env).await;
+    let source = env.work.path().join("operator-auth.json");
+    std::fs::write(&source, "fixture credential").unwrap();
+    let mut cfg = (*env.state.supervisor).clone();
+    cfg.codex_auth_file = Some(source);
+    let state = AppState::with_supervisor(env.state.pool.clone(), cfg);
+    let run_id = match surge_server::supervisor::dispatch_doc_run(&state, "prj_fix").await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Succeeded);
+    let home = std::fs::read_to_string(env.repo.path().join("docs/summary.md")).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while std::path::Path::new(home.trim()).exists() {
+        assert!(std::time::Instant::now() < deadline, "descendant kept isolated home after worker exit");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn touching_unchanged_existing_doc_does_not_complete_run() {
+    let env = setup("#!/bin/sh\ncat >/dev/null\ntouch -t 203001010000 docs/summary.md\nexit 0\n").await;
+    compile(&env).await;
+    std::fs::create_dir_all(env.repo.path().join("docs")).unwrap();
+    std::fs::write(env.repo.path().join("docs/summary.md"), "original content\n").unwrap();
+    let run_id = match surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.unwrap() {
+        surge_server::supervisor::DispatchOutcome::Spawned { run_id } => run_id,
+        _ => panic!("expected spawn"),
+    };
+    assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn compiler_owned_file_cannot_count_as_declared_doc_output() {
+    let env = setup("#!/bin/sh\ncat >/dev/null\nexit 0\n").await;
+    compile(&env).await;
+    std::fs::create_dir_all(env.repo.path().join("docs")).unwrap();
+    std::os::unix::fs::symlink("../AGENTS.md", env.repo.path().join("docs/summary.md")).unwrap();
+    let result = surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await;
+    match result {
+        Ok(surge_server::supervisor::DispatchOutcome::Spawned { run_id }) => {
+            assert_eq!(wait_terminal(&env, &run_id, 5_000).await, RunStatus::Failed);
+        }
+        Err(_) => {
+            let runs = surge_store::observatory::list_runs(&env.state.pool, Some("prj_fix")).await.unwrap();
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].status, RunStatus::Failed);
+        }
+        other => panic!("unexpected dispatch result: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn doc_token_mint_failure_terminalizes_inserted_run() {
+    let env = setup("#!/bin/sh\nexit 0\n").await;
+    compile(&env).await;
+    sqlx::query("CREATE TRIGGER deny_runtime_mint BEFORE INSERT ON token WHEN NEW.kind = 'runtime' BEGIN SELECT RAISE(ABORT, 'mint denied by fixture'); END")
+        .execute(&env.state.pool).await.unwrap();
+    assert!(surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.is_err());
+    let runs = surge_store::observatory::list_runs(&env.state.pool, Some("prj_fix")).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, RunStatus::Failed);
+    let spans = surge_store::observatory::span_tree(&env.state.pool, &runs[0].id).await.unwrap();
+    assert!(spans.iter().any(|s| s.body.as_deref().unwrap_or("").contains("runtime token mint failed")));
+}
+
+#[tokio::test]
+async fn doc_dispatch_audit_failure_unwinds_spawned_worker() {
+    let env = setup_with_server("#!/bin/sh\ncat >/dev/null\nsleep 30\n", false).await;
+    compile(&env).await;
+    sqlx::query("CREATE TRIGGER deny_dispatch_audit BEFORE INSERT ON audit_entry WHEN NEW.action = 'run.dispatched' BEGIN SELECT RAISE(ABORT, 'audit denied by fixture'); END")
+        .execute(&env.state.pool).await.unwrap();
+    assert!(surge_server::supervisor::dispatch_doc_run(&env.state, "prj_fix").await.is_err());
+    let runs = surge_store::observatory::list_runs(&env.state.pool, Some("prj_fix")).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, RunStatus::Failed);
+    let live_tokens: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM token WHERE kind = 'runtime' AND revoked_at IS NULL")
+        .fetch_one(&env.state.pool).await.unwrap();
+    assert_eq!(live_tokens, 0);
+    let home = env.work.path().join("worktrees/codex-home");
+    assert_eq!(std::fs::read_dir(home).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn work_order_dispatch_audit_failure_releases_lease_and_worktree() {
+    let env = setup_with_server("#!/bin/sh\ncat >/dev/null\nsleep 30\n", false).await;
+    compile(&env).await;
+    create_issue(&env).await;
+    sqlx::query("CREATE TRIGGER deny_dispatch_audit BEFORE INSERT ON audit_entry WHEN NEW.action = 'run.dispatched' BEGIN SELECT RAISE(ABORT, 'audit denied by fixture'); END")
+        .execute(&env.state.pool).await.unwrap();
+    assert!(surge_server::supervisor::dispatch_issue(&env.state, "iss_1").await.is_err());
+    let runs = surge_store::observatory::list_runs(&env.state.pool, Some("prj_fix")).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, RunStatus::Failed);
+    let issue = surge_store::issues::get(&env.state.pool, "iss_1").await.unwrap().unwrap();
+    assert!(issue.lease.is_none());
+    assert!(!worktree_dir(&env).exists());
+    let live_tokens: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM token WHERE kind = 'runtime' AND revoked_at IS NULL")
+        .fetch_one(&env.state.pool).await.unwrap();
+    assert_eq!(live_tokens, 0);
+}
