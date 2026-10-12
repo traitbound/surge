@@ -6,9 +6,8 @@
 
 - Phase 0 accepted on 2026-08-28 with recorded exceptions, using real Claude workers. The October Codex migration has not had equivalent real-runtime/browser acceptance.
 - The code contains binding, compilation, single-worker supervision, scoped runtime tools and basic registry/run inspection. Assignment and canvas specs are drafts; preparatory ESC-1 through ESC-5 fixes are in Git, not shipped canvas functionality.
-- The 2026-10-12 baseline review ran 117 Rust tests and the UI production build successfully. Actuator tests substitute shell workers, so that result does not establish Codex acceptance.
-- The [2026-10-12 real Codex/browser walk](phase-0.1/smoke-2026-10-12.md) is NO-GO: the default worker argument order is rejected by Codex 0.160.0. Binding, compilation, visible failure, failed-startup drain and stale-materialization refusal passed; successful runtime cases remain unproven.
-- Latest [investigation checkpoint](phase-0.1/investigation-2026-10-12.md): startup fixes enabled a real Codex task commit and timed abort/token revocation. Phase 0.1 is in progress; review findings, adverse walks and final checks remain open. The earlier CLI failure above is historical, not the current blocker.
+- The [initial 2026-10-12 Codex walk](phase-0.1/smoke-2026-10-12.md) was NO-GO because the installed CLI rejected the default worker arguments. That failure is retained as historical evidence.
+- The [2026-10-12 follow-up](phase-0.1/smoke-followup-2026-10-12.md) is **local smoke GO**: real Codex work-order, abort, doc, lease-expiry and MCP-failure cases were observed; reviewed guards passed regressions; a fresh checkout of task commit `73b2b13146d3` passed locked UI installation/build and Rust workspace build/tests. A browser-client claim-navigation warning remains explicit, though the reload showed an authenticated Registry. The operator deferred hosted CI. Phase 0.1 stays in progress until the task branch is integrated.
 - No calendar delivery commitment is implied. Estimate one acceptance slice after grounding it against code; report evidence and unresolved risk before scheduling the next.
 
 ## Execution order
@@ -44,4 +43,4 @@ Exact pre-replan docs are in [the archive](archive/2026-10-12/README.md). The fo
 
 ## Next action
 
-Execute [phase-0.1](phase-0.1/phase.md) as bounded slices. Record real Codex and browser evidence before starting 1.1 implementation. This replan creates acceptance requirements; it does not claim those future features or acceptance walks have happened.
+Integrate the reviewed Phase 0.1 task branch, keeping the browser-navigation exception and deferred hosted CI visible. Then begin Phase 1.1 against the accepted foundation; this roadmap does not claim Phase 1.1 implementation.

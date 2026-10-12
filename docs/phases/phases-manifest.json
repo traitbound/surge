@@ -21,6 +21,7 @@
       "name": "Revalidate the Codex foundation",
       "status": "in_progress",
       "doc": "phase-0.1/phase.md",
+      "note": "Local smoke GO on task commit 73b2b13146d3 with browser-client navigation exception; hosted CI deferred by operator; integration pending.",
       "depends_on": [],
       "specs": 3
     },

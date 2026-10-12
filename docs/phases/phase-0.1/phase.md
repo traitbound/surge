@@ -1,6 +1,6 @@
 # Phase 0.1 — Revalidate the Codex foundation
 
-**Status:** in_progress
+**Status:** in_progress (local smoke GO; branch integration pending)
 **Replanned:** 2026-10-12
 **Depends on:** accepted Phase 0 foundation
 **Estimate:** unestimated; size the next slice against its acceptance evidence before assigning dates.
@@ -54,6 +54,6 @@ graph LR
 
 ## Acceptance evidence
 
-Latest checkpoint: [2026-10-12 real-Codex follow-up](smoke-followup-2026-10-12.md), continuing the [investigation handoff](investigation-2026-10-12.md). Work-order commit, timed abort, document output, silent lease expiry and required-MCP failure have observed results. Review-driven credential and document guards have local regressions. A committed task branch, fresh checkout of that commit, hosted CI, and the final browser redirect exception remain. **Phase is not accepted.** The [initial NO-GO walk](smoke-2026-10-12.md) remains historical evidence.
+Latest checkpoint: [2026-10-12 real-Codex follow-up](smoke-followup-2026-10-12.md), continuing the [investigation handoff](investigation-2026-10-12.md). **The local smoke verdict is GO with a documented browser-client navigation exception.** Work-order commit, timed abort, document output, silent lease expiry and required-MCP failure have observed results. Review-driven credential and document guards passed regressions. A fresh checkout of task commit `73b2b13146d3` passed locked UI installation/build and the Rust workspace build/tests, including explicit installed-CLI and macOS sandbox checks. The operator deferred hosted CI. The task branch still needs integration before this phase is accepted on main; no Phase 1.1 implementation is claimed. The [initial NO-GO walk](smoke-2026-10-12.md) remains historical evidence.
 
 Local suites are regression evidence. Acceptance additionally needs a dated walk recording the commit, runtime version where relevant, observable rows/files/git objects, adverse cases, and any explicitly accepted exception. No phase closes from a spec status or passing mock-worker test alone.
